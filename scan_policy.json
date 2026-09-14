@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "description": "Protection affects proposals, not inventory. Git ignored never means disposable.",
+  "scan_excludes": [],
+  "protected_paths": [
+    "%USERPROFILE%/.ssh", "%USERPROFILE%/.aws", "%USERPROFILE%/.azure",
+    "%USERPROFILE%/.gnupg", "%USERPROFILE%/.kube",
+    "%USERPROFILE%/.cache/codex-runtimes", "%USERPROFILE%/.codex",
+    "%USERPROFILE%/AppData/Roaming/Codex",
+    "%USERPROFILE%/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0"
+  ],
+  "protected_components": [
+    ".git", ".svn", ".hg", "node_modules", ".venv", "venv", "site-packages",
+    "LocalHistory", "Local History", "IndexedDB", "Local Storage", "Session Storage",
+    "WebStorage", "CacheStorage", "Service Worker", "Network", "databases",
+    "backups", "backup", "credentials"
+  ],
+  "protected_extensions": [
+    ".py", ".pyw", ".js", ".jsx", ".ts", ".tsx", ".java", ".kt", ".kts",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".go", ".rs", ".vue", ".svelte", ".ps1", ".bat", ".cmd", ".sh",
+    ".sql", ".cnf", ".pem", ".key", ".pfx", ".p12", ".ovpn",
+    ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".config", ".xml", ".csv",
+    ".properties", ".gradle", ".lock", ".bak", ".backup",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pdf", ".md",
+    ".db", ".sqlite", ".sqlite3", ".db3", ".mdb", ".accdb",
+    ".vhd", ".vhdx", ".vmdk", ".qcow2", ".gguf", ".safetensors", ".pth", ".pt", ".onnx"
+  ],
+  "protected_names": [
+    "Cookies", "Login Data", "History", "Bookmarks", "Preferences", "Secure Preferences",
+    "Web Data", "Local State", "NTUSER.DAT", "UsrClass.dat", "pagefile.sys", "hiberfil.sys", "swapfile.sys"
+  ],
+  "temporary_extensions": [".tmp", ".temp", ".dmp", ".mdmp", ".hdmp"],
+  "log_extensions": [".log", ".etl"],
+  "temporary_min_days": 7,
+  "log_min_days": 30,
+  "aged_review_days": 90,
+  "large_review_bytes": 104857600,
+  "confirmed_rebuildable_database_roots": ["D:/Work/Gitlab/imp/.scratch"],
+  "database_quiet_hours": 24,
+  "custom_protected_paths": [],
+  "custom_protected_globs": [],
+  "notes": [
+    "Age alone never makes a file a cleanup candidate.",
+    "Cache directories containing browser profiles require inspection below the profile boundary.",
+    "Source, untracked project work, backups, installed dependencies and user content are retained.",
+    "Git repository candidates must be ignored AND untracked; query failures keep files.",
+    "Reparse points, multiple hard links, unreadable and changing files are excluded from estimates.",
+    "No script in this project executes a cleanup plan."
+  ]
+}
