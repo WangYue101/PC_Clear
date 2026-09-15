@@ -1,8 +1,9 @@
-"""Analyze complete inventories and emit a proposal; no cleanup implementation."""
+"""Analyze complete inventories and emit an unselected cleanup proposal."""
 from __future__ import annotations
 import argparse
 from collections import Counter,defaultdict
 import hashlib
+import heapq
 import json
 import os
 from pathlib import Path
@@ -14,9 +15,12 @@ import time
 from .evidence import adjusted_size, environment_snapshot, git_filter
 from .rules import application, classify_directory, classify_file, inside, load_policy, norm
 from .scan import native, stamp, write_json
+from .storage import discover_chat_roots, directory_storage, file_storage, file_kind, LABELS, Storage
+from .windows_files import identity
 
-POTENTIAL = {'cache','build_cache','build_binary','temporary','logs','test_database'}
-INHERITED = {'protected','system','installed','managed','user_data','dependency','app_managed'}
+POTENTIAL = {'cache','build_cache','build_binary','temporary','logs','test_database', 'codex_catalog', 'generated_binary', 'chat_media'}
+# Personal-data containers and protected mixed roots may contain separately identifiable caches.
+INHERITED = {'system','installed','managed','dependency'}
 
 
 def read_inventory(path):
@@ -67,6 +71,10 @@ def analyze_drive(database,policy,environment,manifest):
     repositories={}
     contexts={}
     owners={}
+    storage_contexts={}
+    chat_roots=discover_chat_roots(directories)
+    storage_groups={}
+    largest=[]
     shapes=defaultdict(set)
     for row in con.execute("SELECT directory,name FROM files WHERE name IN ('index','data_0','data_1','ibdata1')"):
         shapes[row['directory']].add(row['name'])
@@ -74,6 +82,9 @@ def analyze_drive(database,policy,environment,manifest):
         if Path(row['path']).name.lower() in {'cache_data','index-dir'} and row['parent']:
             shapes[row['parent']].add(Path(row['path']).name.lower())
     chromium=set()
+    generated_outputs={norm(directories[r['directory']]['path']) for r in con.execute(
+        "SELECT DISTINCT directory FROM files WHERE name LIKE '%.deps.json' OR name LIKE '%.runtimeconfig.json' OR name IN ('CMakeCache.txt','build.ninja')")
+        if directory_storage(directories[r['directory']]['path']) and directory_storage(directories[r['directory']]['path']).kind=='generated'}
     for ident,features in shapes.items():
         row=directories[ident]
         if Path(row['path']).name.lower() in {'cache','cache_data'} and (
@@ -101,9 +112,16 @@ def analyze_drive(database,policy,environment,manifest):
         if inherited and inherited.category in INHERITED:
             context=inherited
         else:
-            context=classify_directory(row['path'],policy,chromium,mysql_roots if '/.scratch/' in norm(row['path']) else ())
+            context=classify_directory(row['path'],policy,chromium,mysql_roots if '/.scratch/' in norm(row['path']) else (),chat_roots,generated_outputs)
         contexts[ident]=context
+        storage_contexts[ident]=directory_storage(row['path'],chat_roots)
         owner=application(row['path'],repo)
+        storage=storage_contexts[ident]
+        if storage and storage.app != '任务生成数据' and not repo:
+            owner=storage.app
+        if not storage and context.category in {'cache','build_cache','build_binary','temporary','logs'}:
+            kind = 'application_cache' if context.category=='cache' else 'temporary' if context.category in {'temporary','logs'} else 'build_output'
+            storage_contexts[ident]=Storage(owner,kind,context.scope,context.reason,'可预览已通过 Git、类型和文件检查的部分；其余保留')
         owners[ident]=owner
         apps[owner]['logical_bytes']+=row['own_bytes']
         apps[owner]['files']+=row['own_files']
@@ -124,6 +142,30 @@ def analyze_drive(database,policy,environment,manifest):
         if age>=policy['aged_review_days']:
             apps[owner]['modified_over_90_days_bytes']+=row['bytes']
         decision,reason=classify_file(context,row['name'],age,policy)
+        storage=file_storage(storage_contexts[ident],row['name'])
+        kind=storage.kind if storage else file_kind(row['name'])
+        scope=storage.scope if storage else ''
+        storage_key='|'.join((owner,kind,scope))
+        if storage_key not in storage_groups:
+            storage_groups[storage_key]={'app':owner,'kind':kind,'label':LABELS[kind],'scope':scope,
+                'reason':storage.reason if storage else '按扩展名统计；大小或年龄不能证明可删除',
+                'action':storage.action if storage else '查看目录和文件，结合用途判断',
+                'logical_bytes':0,'files':0,'old_bytes':0,'candidate_bytes':0,'examples':[]}
+        storage_group=storage_groups[storage_key]
+        storage_group['logical_bytes']+=row['bytes']
+        storage_group['files']+=1
+        if age >= policy['aged_review_days']:
+            storage_group['old_bytes']+=row['bytes']
+        full_path=os.path.join(folder['path'],row['name'])
+        examples=storage_group['examples']
+        if len(examples)<5 or row['bytes']>examples[-1]['bytes']:
+            examples.append({'path':full_path,'bytes':row['bytes'],'age_days':round(age,1)})
+            examples.sort(key=lambda x:x['bytes'],reverse=True)
+            del examples[5:]
+        if len(largest)<500 or row['bytes']>largest[0][0]:
+            item=(row['bytes'],row['id'],full_path,owner,kind,round(age,1))
+            if len(largest)<500: heapq.heappush(largest,item)
+            else: heapq.heapreplace(largest,item)
         dispositions[decision]['files']+=1
         dispositions[decision]['bytes']+=row['bytes']
         if (age>=policy['aged_review_days'] and row['bytes']>=policy['large_review_bytes']) or (
@@ -137,7 +179,7 @@ def analyze_drive(database,policy,environment,manifest):
         if decision=='candidate':
             repo=repositories[ident]
             path=os.path.join(folder['path'],row['name'])
-            if context.category in {'build_binary','test_database'} and not repo:
+            if context.category in {'build_binary','test_database','generated_binary'} and not repo:
                 dispositions['no_repository_evidence']['bytes']+=row['bytes']
                 dispositions['no_repository_evidence']['files']+=1
                 continue
@@ -152,7 +194,9 @@ def analyze_drive(database,policy,environment,manifest):
                     continue
             proposals.append({'drive':drive,'file_id':row['id'],'path':path,'app':owner,
                               'category':context.category,'scope':context.scope,'logical_bytes':row['bytes'],
-                              'mtime':row['mtime'],'repository':repo,'reason':reason})
+                              'mtime':row['mtime'],'repository':repo,'reason':reason,'storage_key':storage_key,
+                              'chat_roots':chat_roots if context.category=='chat_media' else {},
+                              'generated_output_roots':[norm(parent) for parent in Path(path).parents if norm(parent) in generated_outputs] if context.category=='generated_binary' else []})
         if time.monotonic()-last_progress>=10:
             last_progress=time.monotonic()
             print(json.dumps({'stage':'classify','drive':drive,'files':number,'potential_files':len(proposals)},ensure_ascii=True),flush=True)
@@ -198,6 +242,8 @@ def analyze_drive(database,policy,environment,manifest):
             dispositions['live_unreadable']['bytes']+=row['logical_bytes']
             continue
         group_key='|'.join((drive,row['app'],row['category']))
+        if row['category'] in {'chat_media','generated_binary','codex_catalog'}:
+            group_key+='|'+row['scope']
         value=selections[group_key]
         value['drive'],value['app'],value['category']=drive,row['app'],row['category']
         value['files']+=1
@@ -208,8 +254,10 @@ def analyze_drive(database,policy,environment,manifest):
         value['types'][Path(row['path']).suffix.lower() or '[无扩展名]']+=physical
         apps[row['app']]['candidate_bytes']+=physical
         apps[row['app']]['candidate_files']+=1
+        storage_groups[row['storage_key']]['candidate_bytes']+=physical
         manifest.write(json.dumps({**row,'group_key':group_key,'git_state':git_state,'estimated_bytes':physical,
-                                   'verified_nlink':info.st_nlink,'verified_at':stamp()},ensure_ascii=False)+'\n')
+                                   'verified_nlink':info.st_nlink,'verified_at':stamp(),
+                                   'identity':identity(info)},ensure_ascii=False)+'\n')
         verified+=1
         if verified%10000==0:
             manifest.flush()
@@ -227,6 +275,11 @@ def analyze_drive(database,policy,environment,manifest):
             'version_reviews':version_reviews(directories),'large_aged_files':sorted(large_old,key=lambda x:x['bytes'],reverse=True),
             'temporary_extension_files':sorted(scattered_temp,key=lambda x:x['bytes'],reverse=True),
             'cache_directories':sorted(cache_directories,key=lambda x:x['logical_bytes'],reverse=True),
+            'storage_groups':sorted(storage_groups.values(),key=lambda x:x['logical_bytes'],reverse=True),
+            'chat_roots':chat_roots,
+            'largest_files':[{'path':p,'bytes':b,'app':o,'kind':k,'age_days':age} for b,_,p,o,k,age in sorted(largest,reverse=True)],
+            'largest_directories':[{'path':r['path'],'bytes':r['total_bytes'],'files':r['total_files']}
+                                   for r in sorted(directories.values(),key=lambda r:r['total_bytes'],reverse=True)[:300]],
             'mysql_roots':mysql_roots,'analysis_finished_at':stamp(),'analysis_elapsed_seconds':round(time.monotonic()-started)}
     con.close()
     return result,dict(selections)
@@ -251,12 +304,15 @@ def main():
             all_selections.update(selections)
     groups=[]
     for index,(key,value) in enumerate(sorted(all_selections.items(),key=lambda x:(x[1]['drive'],-x[1]['estimated_bytes'],x[0])),1):
-        groups.append({'id':f'F{index:03d}','group_key':key,**value,'mode':'manifest_files_only',
+        groups.append({'id':f'F{index:03d}','group_key':key,**value,'mode':'manifest_files_only','selected':False,
+                       'risk':'personal' if value['category']=='chat_media' else 'rebuild',
                        'require_app_closed_and_live_revalidation':True})
-    plan={'approved':False,'execution_implemented':False,'generated_at':stamp(),
+    with (run/'candidate_files.jsonl').open('rb') as handle:
+        manifest_hash=hashlib.file_digest(handle,'sha256').hexdigest()
+    plan={'schema_version':2,'approved':False,'execution_implemented':True,'generated_at':stamp(),
           'source_inventories':{d:all_data[d]['scan']['finished_at'] for d in all_data},
           'policy_sha256':hashlib.sha256(args.policy.read_bytes()).hexdigest(),
-          'manifest':'candidate_files.jsonl','groups':groups,
+          'manifest':'candidate_files.jsonl','manifest_sha256':manifest_hash,'groups':groups,
           'rules':['User selection required. This plan never authorizes whole-directory deletion.',
                    'Recheck Git tracked/ignored state, current processes, path containment, links, types and file locks.',
                    'Skip changed, unreadable, linked or in-use files. Do not stop applications or services automatically.',

@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import re
 
+from .storage import directory_storage, GENERATED_DIRS, MEDIA_TYPES
+
 
 def norm(path):
     return str(path).replace('\\','/').rstrip('/').lower()
@@ -37,7 +39,7 @@ class Context:
     min_days: float = 0
 
 
-def classify_directory(path, policy, chromium_roots=(), mysql_roots=()):
+def classify_directory(path, policy, chromium_roots=(), mysql_roots=(), chat_roots=None, generated_outputs=()):
     p = norm(path)
     parts = p.split('/')
     for root in policy['protected_paths'] + policy['custom_protected_paths']:
@@ -47,7 +49,8 @@ def classify_directory(path, policy, chromium_roots=(), mysql_roots=()):
         return Context('protected','自定义保护模式')
     if any(x in policy['protected_components'] or 'backup' in x or '.bak' in x for x in parts):
         return Context('protected','源码依赖、版本控制、备份或用户状态目录')
-    if p.startswith('c:/windows') or '/system volume information' in p or '/$recycle.bin' in p:
+    # System/installation ownership always wins over application-shaped path names.
+    if inside(p,'c:/windows') or '/system volume information' in p or '/$recycle.bin' in p:
         return Context('system','由 Windows 管理，保留并统计占用')
     if '/appdata/local/packages/microsoft' in p:
         return Context('system','Microsoft 商店/系统应用容器，交由应用或 Windows 管理')
@@ -55,7 +58,21 @@ def classify_directory(path, policy, chromium_roots=(), mysql_roots=()):
         return Context('managed','安装/修复介质，应由安装器管理')
     if '/program files' in p or '/programdata/microsoft/visualstudio/packages' in p:
         return Context('installed','安装目录，旧版本也不能直接删除')
-    if any(x in {'documents','desktop','pictures','music','videos','downloads','xwechat_files'} for x in parts):
+    storage = directory_storage(path, chat_roots)
+    if storage and storage.kind in {'codex_history', 'codex_runtime'}:
+        return Context('protected', storage.reason)
+    if storage and storage.kind == 'codex_cache':
+        if parts[-1] in {'remote_plugin_catalog', 'codex_app_directory', 'codex_apps_tools',
+                         'codex_apps_server_info', 'bundled_plugin_exclusions'}:
+            return Context('codex_catalog', '已识别 Codex 目录缓存；可重新获取，关闭 Codex 后清理', p, 1)
+        return Context('review_cache', storage.reason)
+    if storage and storage.app in {'微信', 'QQ'}:
+        if storage.kind in {'chat_media', 'chat_cache'}:
+            return Context('chat_media', storage.reason, storage.scope, policy.get('chat_media_min_days', 30))
+        return Context('user_data', storage.reason)
+    if storage and storage.kind == 'codex_state' and not any(x in {'log', 'logs', 'tmp'} for x in parts[parts.index('.codex')+1:]):
+        return Context('protected', storage.reason)
+    if any(x in {'documents','desktop','pictures','music','videos','downloads'} for x in parts) and not any(x in GENERATED_DIRS for x in parts):
         return Context('user_data','文档、下载或聊天/媒体文件，需按用途单独选择')
     if '/.cache/torch' in p or '/.cache/huggingface' in p or '/.nuget/packages' in p:
         return Context('dependency','模型或直接引用的依赖，需确认重新下载/还原能力')
@@ -68,6 +85,18 @@ def classify_directory(path, policy, chromium_roots=(), mysql_roots=()):
     for root in mysql_roots:
         if inside(p,root):
             return Context('test_database','用户已确认可重建的测试数据库，仍需 Git、实例状态与年龄核验',root,policy['database_quiet_hours']/24)
+    if any(x in GENERATED_DIRS for x in parts):
+        if any(x in {'toolchains', 'runtimes', 'maven-repository', 'm2', 'local-http-runtime',
+                     'models','model','downloads','exports','datasets','fixtures','inputs'} for x in parts):
+            return Context('dependency', '任务目录中的运行环境、依赖、模型或输入数据；不属于编译产物')
+        # Source/configuration and nested environments are still protected above/below.
+        for i, part in enumerate(parts):
+            if part in GENERATED_DIRS:
+                build_location = part == '.codex-build' or any(x in {'bin','obj','intermediates','target','build','dist','cmakefiles'} for x in parts[i+1:])
+                marked_output = any('/'.join(parts[:end]) in generated_outputs for end in range(i+1,len(parts)+1))
+                if build_location or marked_output:
+                    return Context('generated_binary', '已识别构建输出位置或 .NET/CMake 输出标记；仅 Git 忽略且未跟踪的编译格式', '/'.join(parts[:i+1]), 7)
+                return Context('review_generated', '混合任务目录缺少构建输出证据；模型、导出数据和未知二进制保留')
     for i in range(len(parts)-1,-1,-1):
         segment = parts[i]
         scope = '/'.join(parts[:i+1])
@@ -114,10 +143,23 @@ def classify_file(context, name, age_days, policy):
     extension = ntpath.splitext(lower)[1]
     if lower in policy['protected_names'] or lower == '.env' or lower.startswith('.env.'):
         return 'protected','配置、凭据或用户状态文件'
+    if context.category == 'codex_catalog':
+        if age_days < context.min_days:
+            return 'recent', '目录缓存尚未静置一天'
+        if re.fullmatch(r'[0-9a-f]{16,64}\.json', lower):
+            return 'candidate', context.reason
+        return 'protected', '只允许已识别目录中的散列命名 JSON 目录缓存'
     if extension in policy['protected_extensions']:
         return 'protected','源码、文档、数据库、模型或磁盘镜像格式'
-    if context.category in {'cache','build_cache','build_binary','temporary','logs','test_database'} and age_days < context.min_days:
+    if context.category in {'cache','build_cache','build_binary','temporary','logs','test_database','generated_binary','chat_media'} and age_days < context.min_days:
         return 'recent','尚未满足候选的静置时间'
+    if context.category == 'chat_media':
+        if extension in MEDIA_TYPES | {'.dat', '.pic', '.thumb'}:
+            return 'candidate', '个人聊天媒体；仅在明确接受原图/视频/语音可能丢失后选择'
+        return 'protected', '聊天目录中的数据库、文档、配置和未知文件保留'
+    if context.category == 'generated_binary':
+        allowed = (BUILD_TYPES - {'.bin', '.dat'}) | {'.dll', '.exe', '.pyc'}
+        return ('candidate', context.reason) if extension in allowed else ('protected', '混合任务目录内的源码、配置、文档及未知二进制格式保留')
     if context.category == 'temporary':
         if extension in policy['temporary_extensions'] or (extension in policy['log_extensions'] and age_days >= policy['log_min_days']):
             return 'candidate','临时/转储格式且满足年龄条件'
@@ -140,6 +182,8 @@ def application(path, repository=''):
         return '项目 · ' + repository
     p = str(path).replace('\\','/')
     lower = p.lower()
+    if '/appdata/' in lower and ('/codex/' in lower+'/' or '/packages/openai.codex_' in lower):
+        return 'Codex'
     for marker in ('/AppData/Local/','/AppData/Roaming/','/AppData/LocalLow/','/ProgramData/','/Program Files (x86)/','/Program Files/'):
         start = lower.find(marker.lower())
         if start >= 0:

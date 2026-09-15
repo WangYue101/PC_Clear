@@ -5,9 +5,7 @@
   "protected_paths": [
     "%USERPROFILE%/.ssh", "%USERPROFILE%/.aws", "%USERPROFILE%/.azure",
     "%USERPROFILE%/.gnupg", "%USERPROFILE%/.kube",
-    "%USERPROFILE%/.cache/codex-runtimes", "%USERPROFILE%/.codex",
-    "%USERPROFILE%/AppData/Roaming/Codex",
-    "%USERPROFILE%/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0"
+    "%USERPROFILE%/.cache/codex-runtimes"
   ],
   "protected_components": [
     ".git", ".svn", ".hg", "node_modules", ".venv", "venv", "site-packages",
@@ -33,6 +31,7 @@
   "log_extensions": [".log", ".etl"],
   "temporary_min_days": 7,
   "log_min_days": 30,
+  "chat_media_min_days": 30,
   "aged_review_days": 90,
   "large_review_bytes": 104857600,
   "confirmed_rebuildable_database_roots": ["D:/Work/Gitlab/imp/.scratch"],
@@ -45,6 +44,7 @@
     "Source, untracked project work, backups, installed dependencies and user content are retained.",
     "Git repository candidates must be ignored AND untracked; query failures keep files.",
     "Reparse points, multiple hard links, unreadable and changing files are excluded from estimates.",
-    "No script in this project executes a cleanup plan."
+    "Analysis never deletes files. Cleanup requires an explicit selection, a fresh preview and confirmation.",
+    "Chat media is personal data, separately opt-in. Chat databases and document attachments are retained."
   ]
 }

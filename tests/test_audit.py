@@ -39,6 +39,7 @@ class RulesTests(unittest.TestCase):
             self.assertEqual(self.classify('C:/Users/demo/AppData/Local/Temp',name),'protected')
         self.assertEqual(self.classify('D:/project/node_modules/cache','data_0',chromium={'d:/project/node_modules/cache'}),'protected')
         self.assertNotEqual(self.classify('C:/Users/demo/AppData/Local/Packages/MicrosoftWindows.Client.CBS/Code Cache','data_0'),'candidate')
+        self.assertNotEqual(self.classify('C:/Windows/.codex/cache/remote_plugin_catalog','0123456789abcdef.json'),'candidate')
 
     def test_custom_ignore_protects_but_does_not_hide_inventory(self):
         self.policy['custom_protected_paths']=['d:/keep']

@@ -1,5 +1,13 @@
 # Local inventories contain private paths and can be large. Keep source scripts.
 /reports/
+# Also protect private inventories/previews when --run uses another output directory.
+**/inventory.sqlite*
+**/candidate_files.jsonl
+**/cleanup_plan.json
+**/preview_*.json
+**/preview_*.jsonl
+**/cleanup_*.json
+**/cleanup_*.jsonl
 /disk_audit_*/**/*.json
 /disk_audit_*/**/*.json.tmp
 /disk_audit_*/**/*.md

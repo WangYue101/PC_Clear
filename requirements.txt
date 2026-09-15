@@ -1,0 +1,3 @@
+# Python >= 3.12; the local project environment uses Python 3.13.
+# This application and its unittest suite use the Python standard library only.
+# No third-party Python packages are required.
