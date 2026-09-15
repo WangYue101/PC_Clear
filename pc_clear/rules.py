@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import fnmatch
+import hashlib
 import json
 import ntpath
 import os
@@ -20,11 +21,44 @@ def inside(path, parent):
     return p == q or p.startswith(q + '/')
 
 
+LOCAL_POLICY_FIELDS = ('custom_protected_paths', 'custom_protected_globs', 'scan_excludes',
+                       'confirmed_rebuildable_database_roots')
+
+
+def local_policy_path(path):
+    path = Path(path)
+    return path.with_name(path.stem + '.local' + path.suffix)
+
+
+def policy_digest(path):
+    path = Path(path)
+    digest = hashlib.sha256(path.read_bytes())
+    local = local_policy_path(path)
+    if local.is_file():
+        digest.update(b'\0scan-policy-local\0')
+        digest.update(local.read_bytes())
+    return digest.hexdigest()
+
+
 def load_policy(path):
-    data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    path = Path(path)
+    data = json.loads(path.read_text(encoding='utf-8-sig'))
     if data['schema_version'] != 1:
         raise ValueError('Unsupported policy version')
-    for field in ('protected_paths','custom_protected_paths'):
+    local = local_policy_path(path)
+    if local.is_file():
+        overrides = json.loads(local.read_text(encoding='utf-8-sig'))
+        if overrides.get('schema_version', 1) != 1:
+            raise ValueError('Unsupported local policy version')
+        unknown = set(overrides) - set(LOCAL_POLICY_FIELDS) - {'schema_version'}
+        if unknown:
+            raise ValueError('Unsupported local policy fields: ' + ', '.join(sorted(unknown)))
+        for field in LOCAL_POLICY_FIELDS:
+            additions = overrides.get(field, [])
+            if not isinstance(additions, list):
+                raise ValueError('Local policy field must be a list: ' + field)
+            data[field] = list(dict.fromkeys(data.get(field, []) + additions))
+    for field in ('protected_paths','custom_protected_paths','confirmed_rebuildable_database_roots'):
         data[field] = [norm(os.path.expandvars(p)) for p in data[field]]
     for field in ('protected_components','protected_extensions','protected_names'):
         data[field] = {x.lower() for x in data[field]}

@@ -13,7 +13,7 @@ import threading
 import time
 
 from .evidence import git_filter, powershell_json
-from .rules import classify_directory, classify_file, inside, load_policy, norm
+from .rules import classify_directory, classify_file, inside, load_policy, norm, policy_digest
 from .scan import stamp, write_json
 from .windows_files import checked_path, delete_verified_file, inspect_file
 
@@ -158,7 +158,7 @@ class CleanupSession:
     def _check_binding(self):
         if digest(self.plan_path) != self.plan_hash:
             raise ValueError('分析结果已更新，请重新打开清理清单')
-        if digest(self.policy_path) != self.plan.get('policy_sha256'):
+        if policy_digest(self.policy_path) != self.plan.get('policy_sha256'):
             raise ValueError('规则已变化，请重新分析')
         if digest(self.manifest_path) != self.plan.get('manifest_sha256'):
             raise ValueError('逐文件清单已变化或不完整，请重新分析')

@@ -122,27 +122,53 @@ class GuiTests(unittest.TestCase):
                 con.close()
         self.app.load(self.base)
         self.wait_done()
-        roots=self.app.usage_tree.get_children()
+        all_card=self.app.summary_cards['all']
+        self.assertEqual(all_card['primary'].get(),'1.17 KiB / 1.95 KiB')
+        self.assertIn('60.0%',all_card['secondary'].get())
+        self.assertEqual(self.app.summary_cards['C']['primary'].get(),'600 B / 1000 B')
+        self.assertEqual(self.app.summary_cards['D']['primary'].get(),'600 B / 1000 B')
+
+        roots=self.app.app_tree.get_children()
         self.assertEqual(len(roots),1)
-        self.assertEqual(self.app.usage_tree.item(roots[0],'text'),'C + D 盘汇总')
-        self.assertEqual(self.app.usage_tree.item(roots[0],'values')[:4],('汇总','1.17 KiB','75 B','34'))
-        drives=self.app.usage_tree.get_children(roots[0])
-        self.assertEqual([self.app.usage_tree.item(x,'text') for x in drives],['C 盘','D 盘'])
+        self.assertEqual(self.app.app_tree.item(roots[0],'text'),'C + D 盘汇总')
+        self.assertEqual(self.app.app_tree.item(roots[0],'values')[:4],('汇总','600 B','75 B','34'))
+        drives=self.app.app_tree.get_children(roots[0])
+        self.assertEqual([self.app.app_tree.item(x,'text') for x in drives],['C 盘','D 盘'])
         for drive_node in drives:
-            sections=self.app.usage_tree.get_children(drive_node)
-            self.assertEqual([self.app.usage_tree.item(x,'text') for x in sections],['按应用','按文件夹'])
-            app_section,folder_section=sections
-            self.app.expand_overview(app_section)
-            app_node=self.app.usage_tree.get_children(app_section)[0]
-            self.assertEqual(self.app.usage_tree.item(app_node,'text'),'QQ')
+            app_node=self.app.app_tree.get_children(drive_node)[0]
+            self.assertEqual(self.app.app_tree.item(app_node,'text'),'QQ')
             self.app.expand_overview(app_node)
-            detail_node=self.app.usage_tree.get_children(app_node)[0]
-            self.assertIn('聊天记录数据库',self.app.usage_tree.item(detail_node,'text'))
-            self.app.expand_overview(folder_section)
-            self.assertEqual(self.app.usage_tree.item(self.app.usage_tree.get_children(folder_section)[0],'text'),'Users')
+            detail_node=self.app.app_tree.get_children(app_node)[0]
+            self.assertIn('聊天记录数据库',self.app.app_tree.item(detail_node,'text'))
+        folder_roots=self.app.folder_tree.get_children()
+        self.assertEqual(len(folder_roots),1)
+        folder_drives=self.app.folder_tree.get_children(folder_roots[0])
+        self.assertEqual([self.app.folder_tree.item(x,'text') for x in folder_drives],['C 盘','D 盘'])
+        for drive_node in folder_drives:
+            self.assertEqual(self.app.folder_tree.item(self.app.folder_tree.get_children(drive_node)[0],'text'),'Users')
+        self.app.app_tree.selection_set(detail_node)
+        self.app.app_tree.focus(detail_node)
+        self.app.app_tree.event_generate('<<TreeviewSelect>>')
+        self.root.update()
+        self.assertIn('保留',self.app.overview_detail.get())
         self.assertFalse(self.app.selected)
         self.assertIsNone(self.app.preview)
         self.assertIn('test snapshot',self.app.status.get())
+
+    def test_missing_folder_index_is_reported_without_stopping_the_ui(self):
+        write_json(self.base/'cleanup_plan.json',{'schema_version':2,'groups':[],'approved':False})
+        for drive in 'CD':
+            (self.base/drive).mkdir()
+            write_json(self.base/drive/'analysis.json',{'scan':{'files':1,'logical_bytes':1,
+                'finished_at':'incomplete snapshot','volume_after':{'total':10,'used':5,'free':5}},
+                'applications':{},'storage_groups':[]})
+        self.app.load(self.base)
+        self.wait_done()
+        root=self.app.folder_tree.get_children()[0]
+        for drive_node in self.app.folder_tree.get_children(root):
+            child=self.app.folder_tree.get_children(drive_node)[0]
+            self.assertEqual(self.app.folder_tree.item(child,'text'),'文件夹索引不可用')
+        self.assertTrue(self.root.tk.call('after','info'))
 
 
 if __name__=='__main__':

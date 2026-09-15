@@ -1,5 +1,7 @@
-# Local inventories contain private paths and can be large. Keep source scripts.
+# Local inventories, historical audits and machine-specific policy contain private paths.
 /reports/
+/disk_audit_*/
+/scan_policy.local.json
 # Also protect private inventories/previews when --run uses another output directory.
 **/inventory.sqlite*
 **/candidate_files.jsonl
@@ -8,12 +10,6 @@
 **/preview_*.jsonl
 **/cleanup_*.json
 **/cleanup_*.jsonl
-/disk_audit_*/**/*.json
-/disk_audit_*/**/*.json.tmp
-/disk_audit_*/**/*.md
-/disk_audit_*/**/*.log
-/disk_audit_*/**/*.sqlite*
-
 # Python build, tooling and local environments
 __pycache__/
 *.py[cod]

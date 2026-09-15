@@ -13,7 +13,7 @@ import stat
 import time
 
 from .evidence import adjusted_size, environment_snapshot, git_filter
-from .rules import application, classify_directory, classify_file, inside, load_policy, norm
+from .rules import application, classify_directory, classify_file, inside, load_policy, norm, policy_digest
 from .scan import native, stamp, write_json
 from .storage import discover_chat_roots, directory_storage, file_storage, file_kind, LABELS, Storage
 from .windows_files import identity
@@ -311,7 +311,7 @@ def main():
         manifest_hash=hashlib.file_digest(handle,'sha256').hexdigest()
     plan={'schema_version':2,'approved':False,'execution_implemented':True,'generated_at':stamp(),
           'source_inventories':{d:all_data[d]['scan']['finished_at'] for d in all_data},
-          'policy_sha256':hashlib.sha256(args.policy.read_bytes()).hexdigest(),
+          'policy_sha256':policy_digest(args.policy),
           'manifest':'candidate_files.jsonl','manifest_sha256':manifest_hash,'groups':groups,
           'rules':['User selection required. This plan never authorizes whole-directory deletion.',
                    'Recheck Git tracked/ignored state, current processes, path containment, links, types and file locks.',

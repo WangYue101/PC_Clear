@@ -2,17 +2,17 @@
 
 扫描 C、D 盘所有可访问的普通文件，按应用、目录布局、Git 仓库、文件类型、修改年龄与运行状态分析占用。**默认只分析；所有清理项默认未选。** 在界面中选择、预览并明确确认后，才逐文件永久清理。不自动关闭用户应用、不修改系统权限。
 
-最新扫描：[完整分析结论](reports/full_20260915_enhanced/完整分析结论.md)、[智能占用分析](reports/full_20260915_enhanced/智能占用分析.md)。2026-09-15 扫描了 3,832,248 个文件；历史快照不能叠加作为可释放量。
+每次扫描结果写入 Git 忽略的 `reports/` 目录；报告包含本机路径和占用快照，不进入版本库。历史快照不能叠加作为可释放量。
 
 ## 使用
 
 需要 Windows、Python 3.12+（包含 Tkinter）、Git 和 Windows PowerShell。当前实现使用标准库，无需额外安装第三方库。
 
-本机已配置 Python 3.13.5 项目虚拟环境：
+项目支持使用独立虚拟环境：
 
-- 解释器：D:\I\py\PC_Clear\.venv\Scripts\python.exe
-- PyCharm 解释器名称：Python 3.13 (PC_Clear)
-- 基础 Python：本机 Python313 安装目录；虚拟环境不继承全局第三方包。
+- 解释器：`.venv\Scripts\python.exe`
+- PyCharm 可将该解释器命名为 `Python 3.13 (PC_Clear)`。
+- 虚拟环境无需继承全局第三方包。
 - [.python-version](.python-version) 指定 3.13；[requirements.txt](requirements.txt) 记录当前没有第三方依赖。
 
 命令行无需激活虚拟环境，可直接检查或运行：
@@ -35,7 +35,7 @@
 
 ### 在哪里选择清理
 
-1. **全部占用**：树根先汇总 C+D 的容量、已用、可用、扫描逻辑文件和候选上限；展开后分为 C、D 两盘，每盘再分“按应用”和“按文件夹”。应用可展开到用途/分析路径，文件夹按需逐层加载；双击文件夹进入完整目录浏览。保护内容仍在统计中。
+1. **全部占用**：顶部卡片分别汇总 C+D、C、D 的容量、使用率、可用空间和扫描逻辑文件；下方“应用占用”“文件夹占用”页签分别展示两棵树，C、D 的第一层结果直接展开。选择节点可在详情区阅读完整说明；应用继续展开到用途/分析路径，文件夹逐层加载，双击文件夹进入完整目录浏览。保护内容仍在统计中。
 2. **目录与文件**：按盘和路径逐层浏览，也可全盘搜索文件名。单页按大小显示前 1,000 条，完整文件记录均在 SQLite 中。
 3. **清理选项**：点击第一列勾选需要处理的组。双击其他列查看精确范围。聊天媒体默认隐藏，只有勾选“显示个人聊天媒体选项”才出现；显示不代表选择。
 4. 点击 **预览已选文件**。程序复核 Git、当前规则、文件身份和运行进程，列出可执行文件、跳过原因、估算空间及完整逐文件预览文件。预览不会删除文件。
@@ -65,10 +65,10 @@
 
 从项目根目录运行，为每次扫描选择新的输出目录：
 
-    $auditPython = 'D:\I\py\PC_Clear\.venv\Scripts\python.exe'
-    $auditRun = 'D:\I\py\PC_Clear\reports\my-new-scan'
-    & $auditPython -m pc_clear.scan --root 'C:\' --output "$auditRun\C" --exclude 'D:\I\py\PC_Clear\reports'
-    & $auditPython -m pc_clear.scan --root 'D:\' --output "$auditRun\D" --exclude 'D:\I\py\PC_Clear\reports'
+    $auditPython = Join-Path $PWD '.venv\Scripts\python.exe'
+    $auditRun = Join-Path $PWD 'reports\my-new-scan'
+    & $auditPython -m pc_clear.scan --root 'C:\' --output "$auditRun\C" --exclude (Join-Path $PWD 'reports')
+    & $auditPython -m pc_clear.scan --root 'D:\' --output "$auditRun\D" --exclude (Join-Path $PWD 'reports')
     & $auditPython -m pc_clear.analyze --run $auditRun
     & $auditPython -m pc_clear.report --run $auditRun
 
@@ -97,8 +97,9 @@ inventory.sqlite 包含 files、directories、gaps、metadata 表。candidate_fi
 [.gitignore](.gitignore) 只控制本项目版本管理：
 
 - 忽略 reports 下的私有本机路径清单、数据库、报告和日志。
-- 忽略历史审计目录下的 JSON、Markdown、日志等生成产物。
-- 保留 Python 源码、测试、README 和 scan_policy.json。
+- 忽略整个历史审计目录；其中的脚本和结论通常含有当时机器的绝对路径与占用快照。
+- 忽略 `scan_policy.local.json`；本机保护路径、扫描排除项和已确认可重建测试数据写在这里。
+- 保留通用 Python 源码、测试、README 和不含本机路径的 scan_policy.json。
 - 忽略 Python 缓存、虚拟环境、工具缓存、构建产物和本机凭据配置。
 
 [scan_policy.json](scan_policy.json) 单独控制分析：
@@ -111,6 +112,8 @@ inventory.sqlite 包含 files、directories、gaps、metadata 表。candidate_fi
 - temporary_min_days / log_min_days / aged_review_days：临时文件候选、日志候选和旧文件复核阈值。
 - chat_media_min_days：个人聊天媒体选项的最小未修改天数（默认 30 天），不意味着数据已经无用。
 - confirmed_rebuildable_database_roots：用户确认可重建的测试数据范围，不是删除授权。
+
+同目录下可新建 `scan_policy.local.json`，仅使用 `custom_protected_paths`、`custom_protected_globs`、`scan_excludes`、`confirmed_rebuildable_database_roots` 四类本机列表。程序会合并它与通用规则，并把两份文件共同绑定到分析计划；修改任一文件后都必须重新分析。本地覆盖文件由 Git 忽略。
 
 Git 查询仅为单次命令指定 safe.directory，不修改全局 Git 配置。仓库候选必须同时未跟踪、被忽略；查询失败则保留。Git 忽略规则不能证明文件无用，也不能覆盖保护规则。
 

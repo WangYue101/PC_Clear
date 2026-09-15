@@ -11,7 +11,7 @@ from unittest.mock import patch
 from pc_clear.analyze import analyze_drive
 from pc_clear.cleanup import CleanupSession, digest
 from pc_clear.evidence import git_run
-from pc_clear.rules import load_policy
+from pc_clear.rules import load_policy, policy_digest
 from pc_clear.scan import inventory, write_json
 from pc_clear.storage import directory_storage, discover_chat_roots, file_storage
 from pc_clear.windows_files import delete_verified_file, identity
@@ -45,10 +45,10 @@ class CleanupTests(unittest.TestCase):
         os.utime(path, (when, when))
         return path
 
-    def analyze(self):
+    def analyze(self, policy=POLICY):
         inventory(self.root, self.run / 'C')
         manifest = io.StringIO()
-        analysis, groups = analyze_drive(self.run / 'C/inventory.sqlite', load_policy(POLICY),
+        analysis, groups = analyze_drive(self.run / 'C/inventory.sqlite', load_policy(policy),
             {'active_datadirs': [], 'unresolved_database_processes': []}, manifest)
         manifest_path = self.run / 'candidate_files.jsonl'
         manifest_path.write_text(manifest.getvalue(), encoding='utf-8')
@@ -57,7 +57,7 @@ class CleanupTests(unittest.TestCase):
                        for i, (key, group) in enumerate(groups.items(), 1)]
         write_json(self.run / 'cleanup_plan.json', {'schema_version': 2, 'approved': False,
             'manifest': manifest_path.name, 'manifest_sha256': digest(manifest_path),
-            'policy_sha256': digest(POLICY), 'groups': plan_groups})
+            'policy_sha256': policy_digest(policy), 'groups': plan_groups})
         return analysis, plan_groups, [json.loads(line) for line in manifest.getvalue().splitlines()]
 
     def cached(self):
@@ -82,6 +82,19 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue((self.root/'Cache/keep.py').exists())
         with self.assertRaises(ValueError):
             session.execute(preview, confirmation=preview.summary['confirmation'], apps_closed=True)
+
+    def test_local_policy_change_invalidates_cleanup_plan(self):
+        policy = self.base / 'scan_policy.json'
+        policy.write_bytes(POLICY.read_bytes())
+        local = self.base / 'scan_policy.local.json'
+        local.write_text(json.dumps({'schema_version': 1, 'custom_protected_paths': []}), encoding='utf-8')
+        self.cached()
+        _, groups, _ = self.analyze(policy)
+        session = CleanupSession(self.run, policy)
+        local.write_text(json.dumps({'schema_version': 1,
+            'custom_protected_paths': [str(self.root / 'Cache')]}), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '规则已变化'):
+            session.prepare([groups[0]['id']])
 
     def test_changed_and_locked_files_are_skipped_at_execution(self):
         path = self.cached()

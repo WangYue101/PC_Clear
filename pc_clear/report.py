@@ -82,7 +82,7 @@ def main():
            table(['磁盘','当前可用空间','本轮候选估算','扫描文件数','扫描完成时间'],
                  [[d+':',human(volumes[d]['free']),human(reclaim[d]),f"{a['scan']['files']:,}",a['scan']['finished_at']] for d,a in data.items()]),'',
            f"可重建缓存/产物候选 **{human(sum(g['estimated_bytes'] for g in plan['groups'] if g.get('risk')!='personal'))}**；另有个人聊天媒体可选范围 **{human(sum(g['estimated_bytes'] for g in plan['groups'] if g.get('risk')=='personal'))}**。聊天媒体不能视作无损可清理缓存。按应用和用途共 {len(plan['groups'])} 组；只能按逐文件清单选择，不能整删上级目录。","",
-           '本轮编号以 F 开头。此前 disk_audit_20260914 下的估算是历史快照；磁盘内容已变化，请以本轮清单为准，不与旧清单相加。磁盘空闲空间的变化不代表本任务执行了清理。','',
+            '本轮编号以 F 开头。此前生成的审计估算属于历史快照；磁盘内容已变化，请以本轮清单为准，不与旧清单相加。磁盘空闲空间的变化不代表本任务执行了清理。','',
            f'读取到 {len(env["installed_apps"])} 条卸载注册表记录、{len(env["packaged_apps"])} 个当前用户商店包，以及 {len(env["processes"])} 条进程记录。注册记录可能含组件或重复项，不等于独立应用数量。按路径/仓库归属建立 {app_count} 个磁盘分组，完整占用表包含没有清理候选的应用和数据。','',
            f'初筛候选中 {ignored_sources} 个 Git 已跟踪文件被保留；仓库内只有“未跟踪且被忽略”的文件才可能通过。配置、源码、凭据、聊天数据库、文档附件、安装环境、多个硬链接、读取失败或扫描后变化的文件均保留。个人聊天媒体单列，默认不选择。','',
            '## 较大的待选项','',

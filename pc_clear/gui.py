@@ -41,6 +41,8 @@ class Application:
         self.path_rows = {}
         self.overview_rows = {}
         self.overview_lazy = {}
+        self.overview_trees = {}
+        self.overview_details = {}
         self.overview_serial = 0
         self.active_query = ''
         self.folder_matches = {}
@@ -53,6 +55,10 @@ class Application:
         self.drive = tk.StringVar(value='C')
         self.folder = tk.StringVar(value='C:\\')
         self.file_query = tk.StringVar()
+        style = ttk.Style(root)
+        style.configure('CardValue.TLabel', font=('Segoe UI Semibold', 16))
+        style.configure('CardMeta.TLabel', foreground='#555555')
+        style.configure('DetailTitle.TLabel', font=('Segoe UI Semibold', 11))
         toolbar = ttk.Frame(root, padding=10)
         toolbar.pack(fill='x')
         for label, command in [('完整扫描分析', self.scan), ('打开已有分析', self.choose_run),
@@ -76,14 +82,46 @@ class Application:
         ttk.Entry(searchbar, textvariable=self.search, width=45).pack(side='left')
         ttk.Button(searchbar, text='搜索', command=self.search_overview).pack(side='left', padx=6)
         ttk.Button(searchbar, text='重置', command=self.reset_search).pack(side='left')
+        cards = ttk.Frame(self.overview)
+        cards.pack(fill='x', pady=(0, 8))
+        self.summary_cards = {}
+        for index, (key, title) in enumerate((('all','C + D 总览'), ('C','C 盘'), ('D','D 盘'))):
+            card = ttk.LabelFrame(cards, text=title, padding=(12, 8))
+            card.pack(side='left', fill='x', expand=True, padx=(0 if index == 0 else 5, 0))
+            primary = tk.StringVar(value='等待分析')
+            secondary = tk.StringVar(value='容量与使用率尚未载入')
+            detail = tk.StringVar(value='')
+            progress = tk.DoubleVar(value=0)
+            ttk.Label(card, textvariable=primary, style='CardValue.TLabel').pack(anchor='w')
+            ttk.Label(card, textvariable=secondary).pack(anchor='w', pady=(2, 5))
+            ttk.Progressbar(card, maximum=100, variable=progress).pack(fill='x')
+            ttk.Label(card, textvariable=detail, style='CardMeta.TLabel', wraplength=350).pack(anchor='w', pady=(5, 0))
+            self.summary_cards[key] = {'primary': primary, 'secondary': secondary,
+                                       'detail': detail, 'progress': progress}
         self.summary_label = ttk.Label(self.overview, text='点击“完整扫描分析”，或载入已有报告。', wraplength=1140)
         self.summary_label.pack(fill='x', pady=(0, 8))
-        self.usage_tree = self.tree(self.overview, [('kind','层级',110), ('bytes','已用 / 逻辑占用',120),
-            ('candidate','候选上限',105), ('files','文件数',85), ('action','说明',420)],
-            hierarchy_label='磁盘 / 应用 / 文件夹 / 用途')
-        self.usage_tree.bind('<<TreeviewOpen>>', self.open_overview_node)
-        self.usage_tree.bind('<Double-1>', self.show_storage)
-        ttk.Label(self.overview, text='先看 C+D 汇总，再展开 C、D 盘；每盘分别按应用和文件夹查看。文件夹逐级加载，双击可进入完整目录浏览。所有文件均统计，保护内容也会显示。').pack(fill='x', pady=5)
+        self.overview_notebook = ttk.Notebook(self.overview)
+        self.overview_notebook.pack(fill='both', expand=True)
+        self.app_view = ttk.Frame(self.overview_notebook, padding=6)
+        self.folder_view = ttk.Frame(self.overview_notebook, padding=6)
+        self.overview_notebook.add(self.app_view, text='应用占用')
+        self.overview_notebook.add(self.folder_view, text='文件夹占用')
+        columns = [('kind','分类',110), ('bytes','逻辑占用',120),
+                   ('candidate','候选上限',105), ('files','文件数',90)]
+        self.app_tree = self.tree(self.app_view, columns, hierarchy_label='应用 / 用途 / 分析路径')
+        self.folder_tree = self.tree(self.folder_view, columns, hierarchy_label='磁盘 / 文件夹')
+        self.usage_tree = self.app_tree
+        for tree in (self.app_tree, self.folder_tree):
+            tree.bind('<<TreeviewOpen>>', lambda event, current=tree: self.open_overview_node(current, event))
+            tree.bind('<<TreeviewSelect>>', lambda event, current=tree: self.show_overview_detail(current))
+            tree.bind('<Double-1>', lambda event, current=tree: self.show_storage(current, event))
+        detail_box = ttk.LabelFrame(self.overview, text='所选项目说明', padding=(10, 6))
+        detail_box.pack(fill='x', pady=(8, 0))
+        self.overview_detail_title = tk.StringVar(value='选择应用、用途或文件夹')
+        self.overview_detail = tk.StringVar(value='候选上限只是分析结果；进入“清理选项”并完成预览后才可执行。')
+        ttk.Label(detail_box, textvariable=self.overview_detail_title, style='DetailTitle.TLabel').pack(anchor='w')
+        ttk.Label(detail_box, textvariable=self.overview_detail, wraplength=1130, justify='left').pack(fill='x', pady=(3, 0))
+        ttk.Label(self.overview, text='应用和文件夹分别展示，C、D 第一层结果已直接展开。候选上限需在清理页预览；“—”表示文件夹视图不重复估算候选空间。双击文件夹可进入完整目录浏览。', wraplength=1150).pack(fill='x', pady=(5, 0))
         self.personal_button = ttk.Checkbutton(self.choices, text='显示个人聊天媒体选项（可能失去原图、视频或语音；数据库、文档附件继续保留）',
                         variable=self.personal, command=self.personal_changed)
         self.personal_button.pack(anchor='w', pady=4)
@@ -196,7 +234,15 @@ class Application:
                     messagebox.showerror('操作未完成', value)
         except queue.Empty:
             pass
-        self.root.after(100, self.poll)
+        except Exception as error:
+            self.busy = False
+            self.personal_button.configure(state='normal')
+            self.invalidate()
+            self.status.set('界面更新未完成：' + str(error))
+            self.log_text.insert('end', '界面更新错误：' + str(error) + '\n')
+            messagebox.showerror('界面更新未完成', str(error))
+        finally:
+            self.root.after(100, self.poll)
 
     def load(self, path):
         path = Path(path).resolve()
@@ -307,124 +353,162 @@ class Application:
             self.choice_tree.insert('', 'end', iid=group['id'], values=(mark,group['id'],group['drive'],group['app'],TITLES.get(group['category'],group['category']),human(group['estimated_bytes']),f"{group['files']:,}"))
         self.selection_label.configure(text=f'已选 {len(self.selected)} 组 · 候选上限 {human(sum(g["estimated_bytes"] for g in self.plan.get("groups",[]) if g["id"] in self.selected))}')
 
-    def overview_insert(self, parent, text, kind, size=0, candidate=0, files=0, action='', *, row=None, lazy=None, opened=False):
+    def overview_insert(self, tree, parent, text, kind, size=0, candidate=0, files=0, action='', *, row=None, lazy=None, opened=False):
         self.overview_serial += 1
         ident = 'overview-' + str(self.overview_serial)
-        self.usage_tree.insert(parent, 'end', iid=ident, text=text,
-            values=(kind, human(size), '—' if candidate is None else human(candidate), f'{files:,}', action), open=opened)
+        tree.insert(parent, 'end', iid=ident, text=text,
+            values=(kind, human(size), '—' if candidate is None else human(candidate), f'{files:,}'), open=opened)
+        self.overview_trees[ident] = tree
+        self.overview_details[ident] = action
         if row is not None:
             self.overview_rows[ident] = row
         if lazy is not None:
             self.overview_lazy[ident] = lazy
-            self.usage_tree.insert(ident, 'end', iid=ident + '-placeholder', text='展开加载…', values=('加载中', '', '', '', ''))
+            tree.insert(ident, 'end', iid=ident + '-placeholder', text='展开加载…', values=('加载中', '', '', ''))
         return ident
 
+    def update_summary_cards(self):
+        def show(key, scans):
+            card = self.summary_cards[key]
+            if not scans:
+                card['primary'].set('未载入')
+                card['secondary'].set('没有此磁盘的分析结果')
+                card['detail'].set('')
+                card['progress'].set(0)
+                return
+            capacity = sum(scan.get('volume_after', {}).get('total', 0) for scan in scans)
+            used = sum(scan.get('volume_after', {}).get('used', 0) for scan in scans)
+            free = sum(scan.get('volume_after', {}).get('free', 0) for scan in scans)
+            logical = sum(scan.get('logical_bytes', 0) for scan in scans)
+            files = sum(scan.get('files', 0) for scan in scans)
+            percent = used * 100 / capacity if capacity else 0
+            card['primary'].set(f'{human(used)} / {human(capacity)}')
+            card['secondary'].set(f'已用 {percent:.1f}% · 可用 {human(free)}')
+            card['detail'].set(f'扫描逻辑 {human(logical)} · {files:,} 个文件')
+            card['progress'].set(percent)
+
+        show('all', [analysis['scan'] for analysis in self.data.values()])
+        for drive in ('C', 'D'):
+            show(drive, [self.data[drive]['scan']] if drive in self.data else [])
+
     def build_overview(self, query=''):
-        self.usage_tree.delete(*self.usage_tree.get_children())
+        for tree in (self.app_tree, self.folder_tree):
+            tree.delete(*tree.get_children())
         self.overview_rows = {}
         self.overview_lazy = {}
+        self.overview_trees = {}
+        self.overview_details = {}
         self.overview_serial = 0
+        self.update_summary_cards()
         if not self.data:
             return
         groups = self.plan.get('groups', [])
         scans = [analysis['scan'] for analysis in self.data.values()]
-        total_capacity = sum(scan.get('volume_after', {}).get('total', 0) for scan in scans)
-        total_used = sum(scan.get('volume_after', {}).get('used', 0) for scan in scans)
-        total_free = sum(scan.get('volume_after', {}).get('free', 0) for scan in scans)
         total_logical = sum(scan.get('logical_bytes', 0) for scan in scans)
         total_candidate = sum(group['estimated_bytes'] for group in groups)
         total_files = sum(scan['files'] for scan in scans)
-        root = self.overview_insert('', 'C + D 盘汇总', '汇总', total_used, total_candidate, total_files,
-            f'总容量 {human(total_capacity)} · 可用 {human(total_free)} · 扫描逻辑文件 {human(total_logical)}', opened=True)
+        app_root = self.overview_insert(self.app_tree, '', 'C + D 盘汇总', '汇总', total_logical,
+            total_candidate, total_files, '全部应用和项目的逻辑文件占用；同一文件只归入一个应用。', opened=True)
+        folder_root = self.overview_insert(self.folder_tree, '', 'C + D 盘汇总', '汇总', total_logical,
+            None, total_files, '全部目录的逻辑文件占用；父目录已经包含子目录，不能相加。', opened=True)
         for drive in ('C', 'D'):
             if drive not in self.data:
                 continue
             analysis = self.data[drive]
             scan = analysis['scan']
-            volume = scan.get('volume_after', {})
             candidate = sum(group['estimated_bytes'] for group in groups if group['drive'] == drive)
-            drive_node = self.overview_insert(root, drive + ' 盘', '磁盘', volume.get('used', 0), candidate,
-                scan['files'], f"容量 {human(volume.get('total',0))} · 可用 {human(volume.get('free',0))} · 扫描逻辑 {human(scan.get('logical_bytes',0))}", opened=True)
-            app_section = self.overview_insert(drive_node, '按应用', '分类视图', scan.get('logical_bytes', 0), candidate,
-                scan['files'], '同一盘的文件按应用或最近 Git 项目归属汇总',
-                lazy={'kind':'applications','drive':drive,'query':query})
-            folder_section = self.overview_insert(drive_node, '按文件夹', '分类视图', scan.get('logical_bytes', 0), candidate,
-                scan['files'], '同一盘按真实目录逐层展开；父子大小不可相加',
-                lazy=None if query else {'kind':'folders','drive':drive,'parent_id':1,'offset':0}, opened=bool(query))
+            app_drive = self.overview_insert(self.app_tree, app_root, drive + ' 盘', '磁盘',
+                scan.get('logical_bytes', 0), candidate, scan['files'],
+                '按应用或最近 Git 项目归属汇总。', opened=True)
+            self.populate_applications(self.app_tree, app_drive, drive, query)
+            folder_drive = self.overview_insert(self.folder_tree, folder_root, drive + ' 盘', '磁盘',
+                scan.get('logical_bytes', 0), None, scan['files'],
+                '按磁盘的真实目录结构逐层展开。', opened=True)
             if query:
-                self.expand_overview(app_section)
-                self.usage_tree.item(app_section,open=True)
-                self.populate_folder_rows(folder_section,drive,self.folder_matches.get(drive,[]),query,0)
+                self.populate_folder_rows(self.folder_tree, folder_drive, drive,
+                                          self.folder_matches.get(drive, []), query, 0)
+            else:
+                self.populate_folders(self.folder_tree, folder_drive, drive, 1, 0)
 
-    def open_overview_node(self, event=None):
-        self.expand_overview(self.usage_tree.focus())
+    def open_overview_node(self, tree=None, event=None):
+        tree = tree or self.app_tree
+        self.expand_overview(tree.focus())
 
     def expand_overview(self, ident):
         lazy = self.overview_lazy.pop(ident, None)
         if not lazy:
             return
+        tree = self.overview_trees[ident]
         placeholder = ident + '-placeholder'
-        if self.usage_tree.exists(placeholder):
-            self.usage_tree.delete(placeholder)
+        if tree.exists(placeholder):
+            tree.delete(placeholder)
         kind = lazy['kind']
-        if kind == 'applications':
-            self.populate_applications(ident, lazy['drive'], lazy.get('query',''))
-        elif kind == 'app_details':
-            self.populate_app_details(ident, lazy['drive'], lazy['app'], lazy.get('query',''))
+        if kind == 'app_details':
+            self.populate_app_details(tree, ident, lazy['drive'], lazy['app'], lazy.get('query',''))
         elif kind in {'folders','folder'}:
-            self.populate_folders(ident, lazy['drive'], lazy['parent_id'], lazy.get('offset',0))
+            self.populate_folders(tree, ident, lazy['drive'], lazy['parent_id'], lazy.get('offset',0))
 
-    def populate_applications(self, parent, drive, query=''):
+    def populate_applications(self, tree, parent, drive, query=''):
         analysis = self.data[drive]
         storage = analysis.get('storage_groups', [])
         by_app={}
+        shown = 0
         for row in storage:
             by_app.setdefault(row['app'],[]).append(row)
         for app, values in sorted(analysis.get('applications', {}).items(), key=lambda item:item[1].get('logical_bytes',0), reverse=True):
             matching = [row for row in by_app.get(app,[]) if not query or query in (app+' '+row['label']+' '+row['scope']).lower()]
             if query and query not in app.lower() and not matching:
                 continue
-            self.overview_insert(parent, app, '应用 / 项目', values.get('logical_bytes',0), values.get('candidate_bytes',0),
+            self.overview_insert(tree, parent, app, '应用 / 项目', values.get('logical_bytes',0), values.get('candidate_bytes',0),
                 values.get('files',0), '展开查看用途与分析路径',
                 lazy={'kind':'app_details','drive':drive,'app':app,'query':query})
+            shown += 1
+        if not shown:
+            self.overview_insert(tree, parent, '无匹配应用', '结果', 0, 0, 0,
+                                 '清除搜索可查看完整应用树。')
 
-    def populate_app_details(self, parent, drive, app, query=''):
+    def populate_app_details(self, tree, parent, drive, app, query=''):
         rows = [row for row in self.data[drive].get('storage_groups', []) if row['app'] == app]
         for row in sorted(rows, key=lambda value:value['logical_bytes'], reverse=True):
             if query and query not in (app+' '+row['label']+' '+row['scope']).lower():
                 continue
             label = row['label'] + ((' · ' + row['scope']) if row['scope'] else '')
-            self.overview_insert(parent, label, '用途 / 路径', row['logical_bytes'], row.get('candidate_bytes',0),
+            self.overview_insert(tree, parent, label, '用途 / 路径', row['logical_bytes'], row.get('candidate_bytes',0),
                 row['files'], row['action'], row={'kind':'storage','drive':drive,'storage':row})
 
-    def populate_folders(self, parent, drive, parent_id, offset=0):
+    def populate_folders(self, tree, parent, drive, parent_id, offset=0):
         if not self.run:
             return
-        with closing(sqlite3.connect((self.run/drive/'inventory.sqlite').as_uri()+'?mode=ro', uri=True)) as con:
-            rows=con.execute('SELECT id,path,total_bytes,total_files,EXISTS(SELECT 1 FROM directories c WHERE c.parent=d.id) FROM directories d WHERE parent=? ORDER BY total_bytes DESC LIMIT 501 OFFSET ?',
-                             (parent_id,offset)).fetchall()
+        try:
+            with closing(sqlite3.connect((self.run/drive/'inventory.sqlite').as_uri()+'?mode=ro', uri=True)) as con:
+                rows=con.execute('SELECT id,path,total_bytes,total_files,EXISTS(SELECT 1 FROM directories c WHERE c.parent=d.id) FROM directories d WHERE parent=? ORDER BY total_bytes DESC LIMIT 501 OFFSET ?',
+                                 (parent_id,offset)).fetchall()
+        except (OSError, sqlite3.Error) as error:
+            self.overview_insert(tree, parent, '文件夹索引不可用', '扫描缺口', 0, None, 0,
+                f'{drive} 盘目录索引无法读取：{error}。可重新扫描，应用占用结果仍可查看。')
+            return
         shown = rows[:500]
         for directory_id,path,size,files,has_children in shown:
-            self.overview_insert(parent, Path(path).name or path, '文件夹', size, None, files,
+            self.overview_insert(tree, parent, Path(path).name or path, '文件夹', size, None, files,
                 '双击进入完整目录浏览；展开查看下一级', row={'kind':'folder','drive':drive,'path':path},
                 lazy={'kind':'folder','drive':drive,'parent_id':directory_id,'offset':0} if has_children else None)
         if len(rows)>500:
-            self.overview_insert(parent, f'继续加载后续文件夹（已显示 {offset+500:,}）', '加载更多', 0, None, 0,
+            self.overview_insert(tree, parent, f'继续加载后续文件夹（已显示 {offset+500:,}）', '加载更多', 0, None, 0,
                 '双击加载下一批', row={'kind':'more','target':parent,'drive':drive,'parent_id':parent_id,
                                        'offset':offset+500})
         if not shown:
-            self.overview_insert(parent, '此文件夹下没有子文件夹', '结果', 0, None, 0, '')
+            self.overview_insert(tree, parent, '此文件夹下没有子文件夹', '结果', 0, None, 0, '')
 
-    def populate_folder_rows(self,parent,drive,rows,query,offset):
+    def populate_folder_rows(self,tree,parent,drive,rows,query,offset):
         for directory_id,path,size,files,has_children in rows[:500]:
-            self.overview_insert(parent,path,'匹配文件夹',size,None,files,
+            self.overview_insert(tree,parent,path,'匹配文件夹',size,None,files,
                 '双击进入完整目录浏览',row={'kind':'folder','drive':drive,'path':path})
         if len(rows)>500:
-            self.overview_insert(parent,f'继续加载搜索结果（已显示 {offset+500:,}）','加载更多',0,None,0,
+            self.overview_insert(tree,parent,f'继续加载搜索结果（已显示 {offset+500:,}）','加载更多',0,None,0,
                 '双击在后台加载下一批',row={'kind':'search_more','target':parent,'drive':drive,
                                              'offset':offset+500,'query':query})
         if not rows:
-            self.overview_insert(parent,'无匹配文件夹','结果',0,None,0,'清除搜索可浏览完整目录树')
+            self.overview_insert(tree,parent,'无匹配文件夹','结果',0,None,0,'清除搜索可浏览完整目录树')
 
     def invalidate(self):
         self.session = self.preview = None
@@ -476,8 +560,20 @@ class Application:
         box.insert('1.0', text)
         box.configure(state='disabled')
 
-    def show_storage(self, event=None):
-        item = self.overview_rows.get(self.usage_tree.focus())
+    def show_overview_detail(self, tree=None):
+        tree = tree or self.app_tree
+        ident = tree.focus()
+        if not ident or not tree.exists(ident):
+            return
+        values = tree.item(ident, 'values')
+        self.overview_detail_title.set(tree.item(ident, 'text'))
+        metrics = ' · '.join(str(value) for value in values if value)
+        detail = self.overview_details.get(ident, '')
+        self.overview_detail.set(metrics + (('\n' + detail) if detail else ''))
+
+    def show_storage(self, tree=None, event=None):
+        tree = tree or self.app_tree
+        item = self.overview_rows.get(tree.focus())
         if not item:
             return
         if item['kind'] == 'storage':
@@ -489,15 +585,15 @@ class Application:
             self.notebook.select(self.browser)
             self.browse()
         elif item['kind'] == 'more':
-            self.usage_tree.delete(self.usage_tree.focus())
-            self.populate_folders(item['target'], item['drive'], item['parent_id'], item['offset'])
+            tree.delete(tree.focus())
+            self.populate_folders(tree, item['target'], item['drive'], item['parent_id'], item['offset'])
         elif item['kind'] == 'search_more' and not self.busy:
-            row_id=self.usage_tree.focus()
+            row_id=tree.focus()
             run=self.run
             def done(rows):
-                if self.usage_tree.exists(row_id):
-                    self.usage_tree.delete(row_id)
-                    self.populate_folder_rows(item['target'],item['drive'],rows,item['query'],item['offset'])
+                if tree.exists(row_id):
+                    tree.delete(row_id)
+                    self.populate_folder_rows(tree,item['target'],item['drive'],rows,item['query'],item['offset'])
             self.worker(lambda:self.query_folder_matches(run,item['drive'],item['query'],item['offset']),done)
 
     def show_choice(self, event=None):

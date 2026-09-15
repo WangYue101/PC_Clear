@@ -12,6 +12,8 @@ import sqlite3
 import stat
 import time
 
+from .rules import load_policy
+
 REPARSE = 0x400
 
 
@@ -197,7 +199,7 @@ def main():
     parser.add_argument('--exclude',type=Path,action='append',default=[])
     parser.add_argument('--policy',type=Path,default=Path(__file__).resolve().parents[1]/'scan_policy.json')
     args = parser.parse_args()
-    settings = json.loads(args.policy.read_text(encoding='utf-8-sig'))
+    settings = load_policy(args.policy)
     inventory(args.root,args.output,args.exclude+[Path(os.path.expandvars(p)) for p in settings.get('scan_excludes',[])])
 
 

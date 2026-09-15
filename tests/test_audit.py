@@ -5,11 +5,12 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pc_clear.analyze import analyze_drive
 from pc_clear.evidence import git_filter,git_run
-from pc_clear.rules import classify_directory,classify_file,load_policy,norm
-from pc_clear.scan import inventory
+from pc_clear.rules import classify_directory,classify_file,load_policy,norm,policy_digest
+from pc_clear.scan import inventory, main as scan_main
 
 POLICY=Path(__file__).resolve().parents[1]/'scan_policy.json'
 
@@ -45,6 +46,36 @@ class RulesTests(unittest.TestCase):
         self.policy['custom_protected_paths']=['d:/keep']
         self.assertEqual(self.classify('D:/keep/Temp','old.tmp'),'protected')
         self.assertEqual(self.policy['scan_excludes'],[])
+
+    def test_ignored_local_policy_is_merged_and_changes_the_binding(self):
+        with tempfile.TemporaryDirectory(prefix='pc_clear_test_') as temp:
+            base=Path(temp)
+            policy=base/'scan_policy.json'
+            base_policy=json.loads(POLICY.read_text(encoding='utf-8'))
+            base_policy['custom_protected_paths']=['D:/shared']
+            base_policy['confirmed_rebuildable_database_roots']=[]
+            policy.write_text(json.dumps(base_policy),encoding='utf-8')
+            before=policy_digest(policy)
+            local=base/'scan_policy.local.json'
+            local.write_text(json.dumps({'custom_protected_paths':['D:/private'],
+                'confirmed_rebuildable_database_roots':['D:/private/test-db']}),encoding='utf-8')
+            merged=load_policy(policy)
+            self.assertEqual(merged['custom_protected_paths'],['d:/shared','d:/private'])
+            self.assertEqual(merged['confirmed_rebuildable_database_roots'],['d:/private/test-db'])
+            self.assertNotEqual(policy_digest(policy),before)
+
+    def test_scan_entry_applies_ignored_local_exclusions(self):
+        with tempfile.TemporaryDirectory(prefix='pc_clear_test_') as temp:
+            base=Path(temp)
+            policy=base/'scan_policy.json'
+            policy.write_bytes(POLICY.read_bytes())
+            (base/'scan_policy.local.json').write_text(json.dumps({
+                'schema_version':1,'scan_excludes':['D:/private-scan-root']}),encoding='utf-8')
+            with patch('sys.argv',['scan','--root','D:/','--output',str(base/'out'),
+                                   '--policy',str(policy)]), patch('pc_clear.scan.inventory') as run_inventory:
+                scan_main()
+            exclusions={norm(path) for path in run_inventory.call_args.args[2]}
+            self.assertIn('d:/private-scan-root',exclusions)
 
 
 class EvidenceTests(unittest.TestCase):

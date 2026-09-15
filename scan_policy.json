@@ -34,7 +34,7 @@
   "chat_media_min_days": 30,
   "aged_review_days": 90,
   "large_review_bytes": 104857600,
-  "confirmed_rebuildable_database_roots": ["D:/Work/Gitlab/imp/.scratch"],
+  "confirmed_rebuildable_database_roots": [],
   "database_quiet_hours": 24,
   "custom_protected_paths": [],
   "custom_protected_globs": [],
