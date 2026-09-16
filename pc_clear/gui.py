@@ -16,10 +16,20 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .cleanup import CleanupSession
 from .report import TITLES, human
+from .topology import drive_to_disk, partition_title, storage_topology
 
 PROJECT = Path(__file__).resolve().parents[1]
 REPORTS = PROJECT / 'reports'
 POLICY = PROJECT / 'scan_policy.json'
+
+
+def latest_scan_run(reports):
+    """Choose the newest complete full-scan report, never a UI/demo fixture."""
+    required = ('cleanup_plan.json', 'C/analysis.json', 'D/analysis.json',
+                'C/inventory.sqlite', 'D/inventory.sqlite')
+    candidates = [plan.parent for plan in reports.glob('full_*/cleanup_plan.json')
+                  if all((plan.parent / relative).is_file() for relative in required)]
+    return max(candidates, key=lambda run: (run / 'cleanup_plan.json').stat().st_mtime, default=None)
 
 
 class Application:
@@ -35,6 +45,9 @@ class Application:
         self.run = None
         self.plan = {}
         self.data = {}
+        self.topology = ()
+        self.topology_sampled_at = None
+        self.topology_read_failed = False
         self.selected = set()
         self.session = None
         self.preview = None
@@ -44,6 +57,8 @@ class Application:
         self.overview_trees = {}
         self.overview_details = {}
         self.overview_serial = 0
+        self.topology_details = {}
+        self.topology_serial = 0
         self.active_query = ''
         self.folder_matches = {}
         self.status = tk.StringVar(value='默认只分析。所有清理选项均未勾选。')
@@ -56,13 +71,12 @@ class Application:
         self.folder = tk.StringVar(value='C:\\')
         self.file_query = tk.StringVar()
         style = ttk.Style(root)
-        style.configure('CardValue.TLabel', font=('Segoe UI Semibold', 16))
-        style.configure('CardMeta.TLabel', foreground='#555555')
         style.configure('DetailTitle.TLabel', font=('Segoe UI Semibold', 11))
         toolbar = ttk.Frame(root, padding=10)
         toolbar.pack(fill='x')
         for label, command in [('完整扫描分析', self.scan), ('打开已有分析', self.choose_run),
                                ('重新分析当前清单', self.reanalyze), ('打开报告目录', self.open_run),
+                               ('刷新实时容量', self.refresh_live_topology),
                                ('停止当前操作', self.stop)]:
             ttk.Button(toolbar, text=label, command=command).pack(side='left', padx=(0, 8))
         ttk.Label(root, textvariable=self.status, padding=(12, 2), wraplength=1180).pack(fill='x')
@@ -82,34 +96,27 @@ class Application:
         ttk.Entry(searchbar, textvariable=self.search, width=45).pack(side='left')
         ttk.Button(searchbar, text='搜索', command=self.search_overview).pack(side='left', padx=6)
         ttk.Button(searchbar, text='重置', command=self.reset_search).pack(side='left')
-        cards = ttk.Frame(self.overview)
-        cards.pack(fill='x', pady=(0, 8))
-        self.summary_cards = {}
-        for index, (key, title) in enumerate((('all','C + D 总览'), ('C','C 盘'), ('D','D 盘'))):
-            card = ttk.LabelFrame(cards, text=title, padding=(12, 8))
-            card.pack(side='left', fill='x', expand=True, padx=(0 if index == 0 else 5, 0))
-            primary = tk.StringVar(value='等待分析')
-            secondary = tk.StringVar(value='容量与使用率尚未载入')
-            detail = tk.StringVar(value='')
-            progress = tk.DoubleVar(value=0)
-            ttk.Label(card, textvariable=primary, style='CardValue.TLabel').pack(anchor='w')
-            ttk.Label(card, textvariable=secondary).pack(anchor='w', pady=(2, 5))
-            ttk.Progressbar(card, maximum=100, variable=progress).pack(fill='x')
-            ttk.Label(card, textvariable=detail, style='CardMeta.TLabel', wraplength=350).pack(anchor='w', pady=(5, 0))
-            self.summary_cards[key] = {'primary': primary, 'secondary': secondary,
-                                       'detail': detail, 'progress': progress}
-        self.summary_label = ttk.Label(self.overview, text='点击“完整扫描分析”，或载入已有报告。', wraplength=1140)
+        self.topology_title = tk.StringVar(value='物理硬盘与分区 · 当前实时容量（正在读取）')
+        topology_box = ttk.LabelFrame(self.overview, text=self.topology_title.get(), padding=(6, 4))
+        self.topology_box = topology_box
+        topology_box.pack(fill='x', pady=(0, 6))
+        topology_columns = [('kind','类型',100), ('capacity','容量',110), ('used','当前已用',110),
+                            ('free','当前可用',110), ('health','状态',90), ('coverage','扫描范围',220)]
+        self.topology_tree = self.tree(topology_box, topology_columns,
+                                       hierarchy_label='物理硬盘 / 分区', height=7)
+        self.topology_tree.bind('<<TreeviewSelect>>', self.show_topology_detail)
+        self.summary_label = ttk.Label(self.overview, text='点击“完整扫描分析”，或载入已有报告；容量将从 Windows 读取，扫描快照单独说明。', wraplength=1140)
         self.summary_label.pack(fill='x', pady=(0, 8))
         self.overview_notebook = ttk.Notebook(self.overview)
         self.overview_notebook.pack(fill='both', expand=True)
         self.app_view = ttk.Frame(self.overview_notebook, padding=6)
         self.folder_view = ttk.Frame(self.overview_notebook, padding=6)
-        self.overview_notebook.add(self.app_view, text='应用占用')
-        self.overview_notebook.add(self.folder_view, text='文件夹占用')
+        self.overview_notebook.add(self.app_view, text='应用智能分析')
+        self.overview_notebook.add(self.folder_view, text='文件夹分析')
         columns = [('kind','分类',110), ('bytes','逻辑占用',120),
                    ('candidate','候选上限',105), ('files','文件数',90)]
-        self.app_tree = self.tree(self.app_view, columns, hierarchy_label='应用 / 用途 / 分析路径')
-        self.folder_tree = self.tree(self.folder_view, columns, hierarchy_label='磁盘 / 文件夹')
+        self.app_tree = self.tree(self.app_view, columns, hierarchy_label='物理硬盘 / 分区 / 应用')
+        self.folder_tree = self.tree(self.folder_view, columns, hierarchy_label='物理硬盘 / 分区 / 文件夹')
         self.usage_tree = self.app_tree
         for tree in (self.app_tree, self.folder_tree):
             tree.bind('<<TreeviewOpen>>', lambda event, current=tree: self.open_overview_node(current, event))
@@ -117,11 +124,11 @@ class Application:
             tree.bind('<Double-1>', lambda event, current=tree: self.show_storage(current, event))
         detail_box = ttk.LabelFrame(self.overview, text='所选项目说明', padding=(10, 6))
         detail_box.pack(fill='x', pady=(8, 0))
-        self.overview_detail_title = tk.StringVar(value='选择应用、用途或文件夹')
-        self.overview_detail = tk.StringVar(value='候选上限只是分析结果；进入“清理选项”并完成预览后才可执行。')
+        self.overview_detail_title = tk.StringVar(value='选择硬盘、分区、应用或文件夹')
+        self.overview_detail = tk.StringVar(value='实时容量来自 Windows；扫描逻辑占用来自报告。候选上限只是分析结果，预览后才可执行。')
         ttk.Label(detail_box, textvariable=self.overview_detail_title, style='DetailTitle.TLabel').pack(anchor='w')
         ttk.Label(detail_box, textvariable=self.overview_detail, wraplength=1130, justify='left').pack(fill='x', pady=(3, 0))
-        ttk.Label(self.overview, text='应用和文件夹分别展示，C、D 第一层结果已直接展开。候选上限需在清理页预览；“—”表示文件夹视图不重复估算候选空间。双击文件夹可进入完整目录浏览。', wraplength=1150).pack(fill='x', pady=(5, 0))
+        ttk.Label(self.overview, text='物理容量不把 C、D 当成两块硬盘相加；系统、保留和恢复分区只展示容量，不扫描或清理。应用与文件夹分别分析；候选上限须在清理页预览。', wraplength=1150).pack(fill='x', pady=(5, 0))
         self.personal_button = ttk.Checkbutton(self.choices, text='显示个人聊天媒体选项（可能失去原图、视频或语音；数据库、文档附件继续保留）',
                         variable=self.personal, command=self.personal_changed)
         self.personal_button.pack(anchor='w', pady=4)
@@ -131,12 +138,15 @@ class Application:
         ttk.Button(choicebar, text='取消全部选择', command=self.clear_selection).pack(side='left', padx=8)
         self.selection_label = ttk.Label(choicebar, text='尚未选择')
         self.selection_label.pack(side='left', padx=8)
-        self.choice_tree = self.tree(self.choices, [('check','选择',55), ('id','编号',70), ('drive','盘',40),
-            ('app','应用 / 项目',300), ('category','清理类型',200), ('bytes','候选上限',100), ('files','文件数',80)])
+        self.cleanup_summary = ttk.Label(self.choices, wraplength=1150, justify='left')
+        self.cleanup_summary.pack(fill='x', pady=(0, 6))
+        self.choice_tree = self.tree(self.choices, [('check','选择',72), ('id','编号',70), ('drive','分区',54),
+            ('app','应用 / 项目',250), ('category','内容类型',190), ('bytes','候选上限',100), ('files','文件数',80)],
+            hierarchy_label='智能清理建议 / 分区')
         self.choice_tree.bind('<Button-1>', self.click_choice)
         self.choice_tree.bind('<space>', self.toggle_focus)
         self.choice_tree.bind('<Double-1>', self.show_choice)
-        ttk.Label(self.choices, text='点击第一列勾选；双击其他列查看精确范围。默认不删除。候选上限包含仍需在预览中排除的运行中或变化文件。', wraplength=1150).pack(fill='x', pady=6)
+        ttk.Label(self.choices, text='仅“可预览的可重建内容”和已显示的聊天媒体可勾选。点击第一列选择；双击其他列查看精确范围。默认不删除，预览会再次核验 Git、文件类型、文件身份和运行状态。', wraplength=1150).pack(fill='x', pady=6)
         browsebar = ttk.Frame(self.browser)
         browsebar.pack(fill='x')
         self.drive_combo = ttk.Combobox(browsebar, textvariable=self.drive, values=('C','D'), state='readonly', width=3)
@@ -167,15 +177,15 @@ class Application:
         root.after(100, self.poll)
         if run:
             self.load(run)
-        elif REPORTS.exists():
-            plans = sorted(REPORTS.glob('*/cleanup_plan.json'), key=lambda p:p.stat().st_mtime, reverse=True)
-            if plans:
-                self.load(plans[0].parent)
+        elif REPORTS.exists() and (recent := latest_scan_run(REPORTS)):
+            self.load(recent)
+        else:
+            self.refresh_live_topology()
 
-    def tree(self, frame, columns, hierarchy_label=None):
+    def tree(self, frame, columns, hierarchy_label=None, height=15):
         holder = ttk.Frame(frame)
         holder.pack(fill='both', expand=True)
-        tree = ttk.Treeview(holder, columns=[x[0] for x in columns],
+        tree = ttk.Treeview(holder, columns=[x[0] for x in columns], height=height,
                             show='tree headings' if hierarchy_label else 'headings', selectmode='browse')
         if hierarchy_label:
             tree.heading('#0', text=hierarchy_label)
@@ -249,9 +259,10 @@ class Application:
         def action():
             plan = json.loads((path/'cleanup_plan.json').read_text(encoding='utf-8'))
             data = {d:json.loads((path/d/'analysis.json').read_text(encoding='utf-8')) for d in ('C','D')}
-            return path, plan, data
+            return path, plan, data, storage_topology(), datetime.now()
         def done(result):
-            self.run, self.plan, self.data = result
+            self.run, self.plan, self.data, self.topology, self.topology_sampled_at = result
+            self.topology_read_failed = not bool(self.topology)
             self.selected.clear()
             self.personal.set(False)
             self.personal_state = False
@@ -261,8 +272,25 @@ class Application:
             self.invalidate()
             self.refresh()
             times = '；'.join(d + ' 盘 ' + a['scan']['finished_at'] for d,a in self.data.items())
-            self.status.set('已载入扫描快照：' + times + '。默认只分析，未选择清理项。')
+            self.status.set('已载入扫描快照：' + times + ('。Windows 实时容量读取失败，已标为扫描时容量。' if self.topology_read_failed else '。默认只分析，未选择清理项。'))
             self.notebook.select(self.overview)
+        self.worker(action, done)
+
+    def refresh_live_topology(self):
+        """Read only the current Windows disk capacities, without rescanning files."""
+        if self.busy:
+            return
+        def action():
+            return storage_topology(), datetime.now()
+        def done(result):
+            self.topology, self.topology_sampled_at = result
+            self.topology_read_failed = not bool(self.topology)
+            self.refresh()
+            if self.preview and self.preview.summary['ready_files']:
+                self.execute_button.configure(state='normal')
+            self.status.set('Windows 实时硬盘容量读取失败；已保留扫描时容量，扫描快照和清理候选没有变化。'
+                            if self.topology_read_failed else
+                            '已刷新 Windows 实时硬盘容量；扫描快照和清理候选保持不变。')
         self.worker(action, done)
 
     def choose_run(self):
@@ -341,17 +369,84 @@ class Application:
         query = self.active_query
         self.build_overview(query)
         total = sum(analysis['scan']['files'] for analysis in self.data.values())
-        rebuild = sum(g['estimated_bytes'] for g in self.plan.get('groups',[]) if g.get('risk') != 'personal')
+        rebuild = sum(g['estimated_bytes'] for g in self.plan.get('groups',[])
+                      if g.get('risk') != 'personal' and g.get('category') != 'test_database')
+        databases = sum(g['estimated_bytes'] for g in self.plan.get('groups',[])
+                        if g.get('category') == 'test_database')
         media = sum(g['estimated_bytes'] for g in self.plan.get('groups',[]) if g.get('risk') == 'personal')
-        self.summary_label.configure(text=f'已索引 {total:,} 个文件。可重建内容候选 {human(rebuild)}；个人聊天媒体可选范围 {human(media)}。两类均须预览核验。' + (' 旧版报告需点击“重新分析当前清单”。' if self.plan.get('schema_version') != 2 else ''))
-        self.choice_tree.delete(*self.choice_tree.get_children())
-        for group in self.plan.get('groups',[]):
-            if group.get('risk') == 'personal' and not self.personal.get(): continue
-            if query and query not in (group['app']+' '+TITLES.get(group['category'],group['category'])+' '+' '.join(group['scopes'])).lower(): continue
-            mark = '☑' if group['id'] in self.selected else '□'
-            if group['category'] == 'test_database': mark = '保留'
-            self.choice_tree.insert('', 'end', iid=group['id'], values=(mark,group['id'],group['drive'],group['app'],TITLES.get(group['category'],group['category']),human(group['estimated_bytes']),f"{group['files']:,}"))
+        self.summary_label.configure(text=(
+            f'已索引 {total:,} 个文件。可预览的可重建内容 {human(rebuild)}；'
+            f'测试数据库 {human(databases)} 需应用内整体处理；个人聊天媒体可选范围 {human(media)}。'
+            '所有清理都须预览核验。'
+            + (' 旧版报告需点击“重新分析当前清单”。' if self.plan.get('schema_version') != 2 else '')
+        ))
+        self.build_cleanup_choices(query)
         self.selection_label.configure(text=f'已选 {len(self.selected)} 组 · 候选上限 {human(sum(g["estimated_bytes"] for g in self.plan.get("groups",[]) if g["id"] in self.selected))}')
+
+    def cleanup_bucket(self, group):
+        """Return the UI safety bucket for a cleanup group."""
+        if group.get('category') == 'test_database':
+            return ('database', '需要应用内处理',
+                    '测试数据库可重建，但不能逐文件删除；请停止实例后用数据库管理工具整体处理。')
+        if group.get('risk') == 'personal':
+            return ('personal', '个人聊天媒体（额外确认）',
+                    '可能失去唯一的原图、视频或语音；聊天数据库、附件和配置继续保留。')
+        return ('rebuild', '可预览的可重建内容',
+                '已按 Git、文件类型和静置时间筛选；预览会再次核验每个文件。')
+
+    def build_cleanup_choices(self, query=''):
+        self.choice_tree.delete(*self.choice_tree.get_children())
+        buckets = {}
+        order = ('rebuild', 'database', 'personal')
+        for group in self.plan.get('groups', []):
+            key, title, note = self.cleanup_bucket(group)
+            if key == 'personal' and not self.personal.get():
+                continue
+            scopes = group.get('scopes', {})
+            scope_paths = scopes.keys() if isinstance(scopes, dict) else scopes
+            searchable = ' '.join(str(value) for value in (
+                group.get('app', ''), TITLES.get(group.get('category'), group.get('category', '')), *scope_paths
+            )).lower()
+            if query and query not in searchable:
+                continue
+            buckets.setdefault(key, {'title': title, 'note': note, 'groups': []})['groups'].append(group)
+
+        selectable = sum(group.get('estimated_bytes', 0)
+                         for key, item in buckets.items() if key != 'database' for group in item['groups'])
+        database = sum(group.get('estimated_bytes', 0) for group in buckets.get('database', {}).get('groups', []))
+        personal = sum(group.get('estimated_bytes', 0) for group in buckets.get('personal', {}).get('groups', []))
+        personal_note = (f'；当前显示个人聊天媒体 {human(personal)}' if self.personal.get()
+                         else '；个人聊天媒体默认隐藏')
+        self.cleanup_summary.configure(text=(
+            f'智能建议按操作方式分组：可预览并可选择 {human(selectable)}，'
+            f'测试数据库 {human(database)} 需要应用内处理{personal_note}。'
+        ))
+
+        for bucket_key in order:
+            item = buckets.get(bucket_key)
+            if not item:
+                continue
+            grouped = {}
+            for group in item['groups']:
+                grouped.setdefault(group.get('drive', '未知'), []).append(group)
+            total = sum(group.get('estimated_bytes', 0) for group in item['groups'])
+            root_id = f'cleanup-{bucket_key}'
+            self.choice_tree.insert('', 'end', iid=root_id, text=item['title'],
+                                    values=('', '', '', '', '', human(total), f'{len(item["groups"]):,} 组'), open=True)
+            for drive in sorted(grouped):
+                drive_groups = sorted(grouped[drive], key=lambda group: (-group.get('estimated_bytes', 0), group['id']))
+                drive_total = sum(group.get('estimated_bytes', 0) for group in drive_groups)
+                drive_id = f'{root_id}-{drive}'
+                self.choice_tree.insert(root_id, 'end', iid=drive_id, text=f'{drive}: 分区',
+                                        values=('', '', drive, '', '', human(drive_total), f'{len(drive_groups):,} 组'), open=True)
+                for group in drive_groups:
+                    mark = '应用内处理' if bucket_key == 'database' else ('☑ 已选' if group['id'] in self.selected else '□ 未选')
+                    category = TITLES.get(group.get('category'), group.get('category', ''))
+                    self.choice_tree.insert(drive_id, 'end', iid=group['id'],
+                                            text=f'{group.get("app", "未识别应用")} · {category}',
+                                            values=(mark, group['id'], group.get('drive', ''), group.get('app', ''),
+                                                    category, human(group.get('estimated_bytes', 0)),
+                                                    f'{group.get("files", 0):,}'))
 
     def overview_insert(self, tree, parent, text, kind, size=0, candidate=0, files=0, action='', *, row=None, lazy=None, opened=False):
         self.overview_serial += 1
@@ -367,29 +462,112 @@ class Application:
             tree.insert(ident, 'end', iid=ident + '-placeholder', text='展开加载…', values=('加载中', '', '', ''))
         return ident
 
-    def update_summary_cards(self):
-        def show(key, scans):
-            card = self.summary_cards[key]
-            if not scans:
-                card['primary'].set('未载入')
-                card['secondary'].set('没有此磁盘的分析结果')
-                card['detail'].set('')
-                card['progress'].set(0)
-                return
-            capacity = sum(scan.get('volume_after', {}).get('total', 0) for scan in scans)
-            used = sum(scan.get('volume_after', {}).get('used', 0) for scan in scans)
-            free = sum(scan.get('volume_after', {}).get('free', 0) for scan in scans)
-            logical = sum(scan.get('logical_bytes', 0) for scan in scans)
-            files = sum(scan.get('files', 0) for scan in scans)
-            percent = used * 100 / capacity if capacity else 0
-            card['primary'].set(f'{human(used)} / {human(capacity)}')
-            card['secondary'].set(f'已用 {percent:.1f}% · 可用 {human(free)}')
-            card['detail'].set(f'扫描逻辑 {human(logical)} · {files:,} 个文件')
-            card['progress'].set(percent)
+    def topology_insert(self, parent, text, kind, capacity=None, used=None, free=None,
+                        health='', coverage='', detail='', opened=False):
+        self.topology_serial += 1
+        ident = 'topology-' + str(self.topology_serial)
+        value = lambda amount: '—' if amount is None else human(amount)
+        self.topology_tree.insert(parent, 'end', iid=ident, text=text,
+                                  values=(kind, value(capacity), value(used), value(free), health or '—', coverage),
+                                  open=opened)
+        self.topology_details[ident] = detail
+        return ident
 
-        show('all', [analysis['scan'] for analysis in self.data.values()])
-        for drive in ('C', 'D'):
-            show(drive, [self.data[drive]['scan']] if drive in self.data else [])
+    def disk_title(self, disk):
+        parts = [f'磁盘 {disk.number}', disk.bus_type, disk.name]
+        return ' · '.join(part for part in parts if part)
+
+    def partition_for_drive(self, drive):
+        for disk in self.topology:
+            for partition in disk.partitions:
+                if partition.drive_letter == drive:
+                    return partition
+        return None
+
+    def drive_title(self, drive):
+        partition = self.partition_for_drive(drive)
+        return partition_title(partition) if partition else f'{drive}: 扫描分区'
+
+    def scan_disk_groups(self):
+        mapping = drive_to_disk(self.topology)
+        groups = []
+        mapped = set()
+        for disk in self.topology:
+            drives = [drive for drive in ('C', 'D') if drive in self.data and mapping.get(drive) == disk]
+            if drives:
+                groups.append((disk, drives))
+                mapped.update(drives)
+        remaining = [drive for drive in ('C', 'D') if drive in self.data and drive not in mapped]
+        if remaining:
+            groups.append((None, remaining))
+        return groups
+
+    def build_topology(self):
+        self.topology_tree.delete(*self.topology_tree.get_children())
+        self.topology_details = {}
+        self.topology_serial = 0
+        sampled = self.topology_sampled_at.strftime('%Y-%m-%d %H:%M:%S') if self.topology_sampled_at else '未读取'
+        if self.topology_read_failed:
+            self.topology_title.set(f'物理硬盘与分区 · 实时容量读取失败（尝试于 {sampled}）')
+            self.topology_tree.heading('used', text='扫描时已用')
+            self.topology_tree.heading('free', text='扫描时可用')
+        else:
+            self.topology_title.set(f'物理硬盘与分区 · 当前实时容量（读取于 {sampled}）')
+            self.topology_tree.heading('used', text='当前已用')
+            self.topology_tree.heading('free', text='当前可用')
+        self.topology_box.configure(text=self.topology_title.get())
+        if not self.topology:
+            root = self.topology_insert('', '实时容量读取失败' if self.topology_read_failed else '未读取物理硬盘拓扑',
+                                        '扫描快照', detail=(
+                'Windows 未返回物理硬盘信息，以下仅显示报告扫描时的 C、D 容量快照，不是当前容量。'
+                if self.topology_read_failed else
+                'Windows 未返回物理硬盘信息，以下仅显示已载入报告中的 C、D 扫描快照。'))
+            for drive in ('C', 'D'):
+                if drive not in self.data:
+                    continue
+                scan = self.data[drive]['scan']
+                volume = scan.get('volume_after', {})
+                self.topology_insert(root, f'{drive}: 扫描快照', '扫描快照', volume.get('total'),
+                    volume.get('used'), volume.get('free'), '—', '扫描快照',
+                    f'扫描完成：{scan.get("finished_at", "未知")}；逻辑文件 {human(scan.get("logical_bytes", 0))}。'
+                    ' Windows 实时容量当前不可用。')
+            return
+        for disk in self.topology:
+            scanned = [part.drive_letter for part in disk.partitions if part.drive_letter in self.data]
+            root = self.topology_insert('', self.disk_title(disk), '物理硬盘', disk.size, health=disk.health,
+                coverage=(f'扫描分区：{", ".join(scanned)}' if scanned else '没有已载入的扫描分区'),
+                detail=(f'这是一个物理硬盘，容量 {human(disk.size)}；其分区不能当作多块硬盘相加。'
+                        f' 状态：{disk.health or "未知"} / {disk.operational_status or "未知"}。'), opened=True)
+            for partition in disk.partitions:
+                drive = partition.drive_letter
+                scan = self.data.get(drive, {}).get('scan') if drive else None
+                if scan:
+                    candidate = sum(group.get('estimated_bytes', 0) for group in self.plan.get('groups', [])
+                                    if group.get('drive') == drive)
+                    coverage = f'已扫描 · 候选上限 {human(candidate)}'
+                    detail = (f'{self.drive_title(drive)} 的实时容量来自 Windows；扫描快照完成于 '
+                              f'{scan.get("finished_at", "未知")}，索引逻辑文件 {human(scan.get("logical_bytes", 0))} '
+                              f'、{scan.get("files", 0):,} 个。候选须在清理页预览后才能执行。')
+                else:
+                    coverage = '仅容量展示 · 不扫描/清理'
+                    system_partition = partition.partition_type in {'System', 'Reserved', 'Recovery'}
+                    detail = ('该分区用于系统、保留或恢复；仅展示容量，不提供清理选项。'
+                              if system_partition else
+                              '该数据分区不在本次 C/D 扫描范围内；仅展示容量，不提供清理选项。')
+                self.topology_insert(root, partition_title(partition),
+                    '已扫描分区' if scan else ('系统 / 恢复分区' if partition.partition_type in {'System', 'Reserved', 'Recovery'} else '未扫描分区'),
+                    partition.volume_size if partition.volume_size is not None else partition.size,
+                    partition.used, partition.free, partition.health, coverage, detail)
+
+    def show_topology_detail(self, event=None):
+        ident = self.topology_tree.focus()
+        if not ident or not self.topology_tree.exists(ident):
+            return
+        values = self.topology_tree.item(ident, 'values')
+        self.overview_detail_title.set(self.topology_tree.item(ident, 'text'))
+        metrics = ' · '.join(str(value) for value in values if value and value != '—')
+        detail = self.topology_details.get(ident, '')
+        self.overview_detail.set(metrics + (('\n' + detail) if detail else ''))
 
     def build_overview(self, query=''):
         for tree in (self.app_tree, self.folder_tree):
@@ -399,36 +577,49 @@ class Application:
         self.overview_trees = {}
         self.overview_details = {}
         self.overview_serial = 0
-        self.update_summary_cards()
+        self.build_topology()
         if not self.data:
             return
         groups = self.plan.get('groups', [])
         scans = [analysis['scan'] for analysis in self.data.values()]
         total_logical = sum(scan.get('logical_bytes', 0) for scan in scans)
-        total_candidate = sum(group['estimated_bytes'] for group in groups)
-        total_files = sum(scan['files'] for scan in scans)
-        app_root = self.overview_insert(self.app_tree, '', 'C + D 盘汇总', '汇总', total_logical,
-            total_candidate, total_files, '全部应用和项目的逻辑文件占用；同一文件只归入一个应用。', opened=True)
-        folder_root = self.overview_insert(self.folder_tree, '', 'C + D 盘汇总', '汇总', total_logical,
-            None, total_files, '全部目录的逻辑文件占用；父目录已经包含子目录，不能相加。', opened=True)
-        for drive in ('C', 'D'):
-            if drive not in self.data:
-                continue
-            analysis = self.data[drive]
-            scan = analysis['scan']
-            candidate = sum(group['estimated_bytes'] for group in groups if group['drive'] == drive)
-            app_drive = self.overview_insert(self.app_tree, app_root, drive + ' 盘', '磁盘',
-                scan.get('logical_bytes', 0), candidate, scan['files'],
-                '按应用或最近 Git 项目归属汇总。', opened=True)
-            self.populate_applications(self.app_tree, app_drive, drive, query)
-            folder_drive = self.overview_insert(self.folder_tree, folder_root, drive + ' 盘', '磁盘',
-                scan.get('logical_bytes', 0), None, scan['files'],
-                '按磁盘的真实目录结构逐层展开。', opened=True)
-            if query:
-                self.populate_folder_rows(self.folder_tree, folder_drive, drive,
-                                          self.folder_matches.get(drive, []), query, 0)
+        total_candidate = sum(group.get('estimated_bytes', 0) for group in groups)
+        total_files = sum(scan.get('files', 0) for scan in scans)
+        app_root = self.overview_insert(self.app_tree, '', '应用智能分析', '扫描范围', total_logical,
+            total_candidate, total_files, '文件按应用、数据布局或最近 Git 项目归属；同一文件只归入一个应用。', opened=True)
+        folder_root = self.overview_insert(self.folder_tree, '', '文件夹分析', '扫描范围', total_logical,
+            None, total_files, '目录大小包含子目录，父子目录不能相加；清理候选不在此树中重复计算。', opened=True)
+        for disk, drives in self.scan_disk_groups():
+            disk_logical = sum(self.data[drive]['scan'].get('logical_bytes', 0) for drive in drives)
+            disk_candidate = sum(group.get('estimated_bytes', 0) for group in groups if group.get('drive') in drives)
+            disk_files = sum(self.data[drive]['scan'].get('files', 0) for drive in drives)
+            if disk:
+                title = self.disk_title(disk)
+                action = f'物理容量 {human(disk.size)}；下方按该硬盘的已扫描分区展开。'
             else:
-                self.populate_folders(self.folder_tree, folder_drive, drive, 1, 0)
+                title = '未匹配物理硬盘的扫描分区'
+                action = 'Windows 未返回这些扫描分区的物理硬盘映射；仍可分别查看分析结果。'
+            app_disk = self.overview_insert(self.app_tree, app_root, title, '物理硬盘', disk_logical,
+                disk_candidate, disk_files, action, opened=True)
+            folder_disk = self.overview_insert(self.folder_tree, folder_root, title, '物理硬盘', disk_logical,
+                None, disk_files, action, opened=True)
+            for drive in drives:
+                analysis = self.data[drive]
+                scan = analysis['scan']
+                candidate = sum(group.get('estimated_bytes', 0) for group in groups if group.get('drive') == drive)
+                title = self.drive_title(drive)
+                app_drive = self.overview_insert(self.app_tree, app_disk, title, '已扫描分区',
+                    scan.get('logical_bytes', 0), candidate, scan.get('files', 0),
+                    '按应用、已识别数据布局或最近 Git 项目归属汇总。', opened=True)
+                self.populate_applications(self.app_tree, app_drive, drive, query)
+                folder_drive = self.overview_insert(self.folder_tree, folder_disk, title, '已扫描分区',
+                    scan.get('logical_bytes', 0), None, scan.get('files', 0),
+                    '按真实目录结构逐层展开；双击文件夹可进入完整目录浏览。', opened=True)
+                if query:
+                    self.populate_folder_rows(self.folder_tree, folder_drive, drive,
+                                              self.folder_matches.get(drive, []), query, 0)
+                else:
+                    self.populate_folders(self.folder_tree, folder_drive, drive, 1, 0)
 
     def open_overview_node(self, tree=None, event=None):
         tree = tree or self.app_tree
@@ -534,7 +725,9 @@ class Application:
 
     def toggle(self, key):
         if self.busy or not key: return
-        group = next(g for g in self.plan['groups'] if g['id'] == key)
+        group = next((g for g in self.plan.get('groups', []) if g['id'] == key), None)
+        if not group:
+            return
         if group['category'] == 'test_database':
             messagebox.showinfo('测试数据库', '数据仍计入占用。请停止实例后使用数据库管理方式整体处理，避免逐文件清理破坏数据库。')
             return
@@ -642,13 +835,22 @@ class Application:
         session, preview = self.session, self.preview
         confirmation = self.confirmation.get()
         def done(result):
+            result, topology, sampled_at = result
+            self.topology = topology
+            self.topology_sampled_at = sampled_at
+            self.topology_read_failed = not bool(self.topology)
             self.invalidate()
             self.selected.clear()
             self.refresh()
             self.show_text('清理结果', json.dumps(result, ensure_ascii=False, indent=2))
-            self.status.set('清理结束；逐文件结果已保存。请重新扫描更新占用，旧快照不会自动变化。')
-        self.worker(lambda:session.execute(preview, confirmation=confirmation, apps_closed=True,
-                    progress=self.progress, cancel=self.cancel), done)
+            self.status.set('清理结束；Windows 实时容量读取失败，已保留扫描时容量。逐文件结果已保存，请重新扫描更新旧占用快照。'
+                            if self.topology_read_failed else
+                            '清理结束；实时容量已刷新。逐文件结果已保存，请重新扫描更新旧占用快照。')
+        def action():
+            result = session.execute(preview, confirmation=confirmation, apps_closed=True,
+                                     progress=self.progress, cancel=self.cancel)
+            return result, storage_topology(), datetime.now()
+        self.worker(action, done)
 
     def browse(self, search=False):
         if self.busy or not self.run: return

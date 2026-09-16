@@ -10,6 +10,7 @@ import sqlite3
 
 from .rules import norm
 from .scan import stamp,write_json
+from .topology import partition_title, storage_topology
 
 TITLES={'cache':'应用缓存','build_cache':'代码生成缓存','build_binary':'编译中间二进制',
         'temporary':'较早的临时文件/转储','logs':'较早的应用日志','test_database':'测试数据库（应用内管理）',
@@ -51,6 +52,28 @@ def local_link(run,name):
     return f'[{name}]({(run/name).as_posix()})'
 
 
+def physical_storage_section(disks, scanned_drives=('C', 'D')):
+    """Render current physical disks before the logical scan-partition summary."""
+    if not disks:
+        return ['## 当前物理硬盘与分区', '',
+                'Windows 未返回物理硬盘拓扑。本报告仍按 C、D 扫描分区展示；它们不应被解释为两块物理硬盘。', '']
+    rows=[]
+    for disk in disks:
+        disk_name=' · '.join(value for value in (f'磁盘 {disk.number}', disk.bus_type, disk.name) if value)
+        rows.append((disk_name, '物理硬盘', human(disk.size), '—', '—', disk.health or '—',
+                     f'{len(disk.partitions)} 个分区'))
+        for partition in disk.partitions:
+            capacity=partition.volume_size if partition.volume_size is not None else partition.size
+            used=human(partition.used) if partition.used is not None else '—'
+            free=human(partition.free) if partition.free is not None else '—'
+            coverage='本轮已扫描' if partition.drive_letter in scanned_drives else '仅容量展示，不扫描或清理'
+            rows.append((f'　└ {partition_title(partition)}', partition.partition_type or '分区', human(capacity),
+                         used, free, partition.health or '—', coverage))
+    return ['## 当前物理硬盘与分区', '',
+            '先按物理硬盘列出其分区。C、D 是分区；其容量相加只是扫描范围，不代表硬盘总容量。系统、保留和恢复分区只展示容量。', '',
+            table(['硬盘 / 分区','类型','容量','当前已用','当前可用','状态','扫描范围'], rows), '']
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run',type=Path,required=True)
@@ -70,19 +93,28 @@ def main():
             git_counts[item['group_key']][item['git_state']]+=1
     volumes={d:dict(zip(('total','used','free'),shutil.disk_usage(d+':\\'))) for d in data}
     write_json(run/'volumes_latest.json',{'at':stamp(),'volumes':volumes})
+    topology=storage_topology()
     total_files=sum(a['scan']['files'] for a in data.values())
     reclaim={d:sum(g['estimated_bytes'] for g in plan['groups'] if g['drive']==d) for d in data}
+    direct_reclaim={d:sum(g['estimated_bytes'] for g in plan['groups']
+                           if g['drive']==d and g.get('risk')!='personal' and g.get('category')!='test_database')
+                    for d in data}
+    database_reclaim={d:sum(g['estimated_bytes'] for g in plan['groups']
+                             if g['drive']==d and g.get('category')=='test_database') for d in data}
+    personal_reclaim={d:sum(g['estimated_bytes'] for g in plan['groups']
+                             if g['drive']==d and g.get('risk')=='personal') for d in data}
     aged=[x for a in data.values() for x in a['large_aged_files']]
     versions=[x for a in data.values() for x in a['version_reviews']]
     ignored_sources=sum(a['dispositions'].get('tracked',{}).get('files',0) for a in data.values())
     app_count=sum(len(a['applications']) for a in data.values())
-    lines=['# C、D 盘完整扫描与待选清理清单','',
+    lines=['# C、D 扫描分区完整分析与待选清理清单','',
            f'报告生成：{stamp()}。已完成全盘可访问文件的元数据扫描，共 **{total_files:,} 个文件**。未执行用户文件清理，也没有停止应用或服务。','',
            '## 本轮结论','',
-           table(['磁盘','当前可用空间','本轮候选估算','扫描文件数','扫描完成时间'],
+           table(['扫描分区','当前可用空间','本轮候选估算','扫描文件数','扫描完成时间'],
                  [[d+':',human(volumes[d]['free']),human(reclaim[d]),f"{a['scan']['files']:,}",a['scan']['finished_at']] for d,a in data.items()]),'',
-           f"可重建缓存/产物候选 **{human(sum(g['estimated_bytes'] for g in plan['groups'] if g.get('risk')!='personal'))}**；另有个人聊天媒体可选范围 **{human(sum(g['estimated_bytes'] for g in plan['groups'] if g.get('risk')=='personal'))}**。聊天媒体不能视作无损可清理缓存。按应用和用途共 {len(plan['groups'])} 组；只能按逐文件清单选择，不能整删上级目录。","",
+           f"可预览的可重建内容 **{human(sum(direct_reclaim.values()))}**；测试数据库 **{human(sum(database_reclaim.values()))}** 需停止实例后在应用内整体处理；另有个人聊天媒体可选范围 **{human(sum(personal_reclaim.values()))}**。聊天媒体不能视作无损可清理缓存。按应用和用途共 {len(plan['groups'])} 组；只能按逐文件清单选择，不能整删上级目录。","",
             '本轮编号以 F 开头。此前生成的审计估算属于历史快照；磁盘内容已变化，请以本轮清单为准，不与旧清单相加。磁盘空闲空间的变化不代表本任务执行了清理。','',
+           *physical_storage_section(topology),
            f'读取到 {len(env["installed_apps"])} 条卸载注册表记录、{len(env["packaged_apps"])} 个当前用户商店包，以及 {len(env["processes"])} 条进程记录。注册记录可能含组件或重复项，不等于独立应用数量。按路径/仓库归属建立 {app_count} 个磁盘分组，完整占用表包含没有清理候选的应用和数据。','',
            f'初筛候选中 {ignored_sources} 个 Git 已跟踪文件被保留；仓库内只有“未跟踪且被忽略”的文件才可能通过。配置、源码、凭据、聊天数据库、文档附件、安装环境、多个硬链接、读取失败或扫描后变化的文件均保留。个人聊天媒体单列，默认不选择。','',
            '## 较大的待选项','',
@@ -125,13 +157,13 @@ def main():
     special=[(d,r) for d,r in storage if r['kind'].startswith(('chat_','codex_')) or r['kind']=='generated']
     smart=['# 智能占用分析','',
            '按实际目录布局、文件格式、Git 状态、修改时间和运行状态给出可解释结论。不会读取聊天正文。每个文件仅归入一个用途组；可选聊天媒体不是可重建缓存，默认不选择。','',
-           '## C + D 盘汇总','',
-           table(['范围','总容量','当前已用','当前可用','扫描逻辑文件','扫描文件数','可重建候选','个人聊天媒体可选范围'],
-                 [['C + D',human(sum(v['total'] for v in volumes.values())),human(sum(v['used'] for v in volumes.values())),
+           '## C、D 扫描分区汇总（非物理硬盘）','',
+           table(['范围','分区容量合计','当前已用','当前可用','扫描逻辑文件','扫描文件数','可预览候选','测试数据库（应用内）','个人聊天媒体可选范围'],
+                 [['C、D 扫描范围',human(sum(v['total'] for v in volumes.values())),human(sum(v['used'] for v in volumes.values())),
                    human(sum(v['free'] for v in volumes.values())),human(sum(a['scan']['logical_bytes'] for a in data.values())),
-                   f'{total_files:,}',human(sum(g['estimated_bytes'] for g in plan['groups'] if g.get('risk')!='personal')),
-                   human(sum(g['estimated_bytes'] for g in plan['groups'] if g.get('risk')=='personal'))]]),'',
-           '“当前已用”来自磁盘容量统计；“扫描逻辑文件”来自可访问普通文件求和。系统保护内容、硬链接、压缩文件和扫描过程中的变化会使两者不同。','']
+                   f'{total_files:,}',human(sum(direct_reclaim.values())),human(sum(database_reclaim.values())),
+                   human(sum(personal_reclaim.values()))]]),'',
+           '“分区容量合计”不是物理硬盘容量，且不含系统、保留和恢复分区。物理硬盘关系见“完整分析结论”开头；“当前已用”来自磁盘容量统计，“扫描逻辑文件”来自可访问普通文件求和。系统保护内容、硬链接、压缩文件和扫描过程中的变化会使两者不同。','']
     for d,a in data.items():
         app_rows=[(name,value) for name,value in a['applications'].items() if value.get('logical_bytes',0)]
         connection=sqlite3.connect((run/d/'inventory.sqlite').as_uri()+'?mode=ro',uri=True)
@@ -140,10 +172,9 @@ def main():
         finally:
             connection.close()
         smart += [f'## {d} 盘','',
-                  table(['总容量','当前已用','当前可用','扫描逻辑文件','扫描文件数','可重建候选','个人聊天媒体可选范围'],
+                  table(['分区容量','当前已用','当前可用','扫描逻辑文件','扫描文件数','可预览候选','测试数据库（应用内）','个人聊天媒体可选范围'],
                         [[human(volumes[d]['total']),human(volumes[d]['used']),human(volumes[d]['free']),human(a['scan']['logical_bytes']),
-                          f"{a['scan']['files']:,}",human(sum(g['estimated_bytes'] for g in plan['groups'] if g['drive']==d and g.get('risk')!='personal')),
-                          human(sum(g['estimated_bytes'] for g in plan['groups'] if g['drive']==d and g.get('risk')=='personal'))]]),'',
+                          f"{a['scan']['files']:,}",human(direct_reclaim[d]),human(database_reclaim[d]),human(personal_reclaim[d])]]),'',
                   f'### {d} 盘 · 按应用','',
                   table(['应用 / 项目','逻辑占用','文件数','候选上限'],
                         [[name,human(value['logical_bytes']),value['files'],human(value.get('candidate_bytes',0))]

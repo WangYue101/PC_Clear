@@ -10,6 +10,19 @@
 **/preview_*.jsonl
 **/cleanup_*.json
 **/cleanup_*.jsonl
+# Derived reports can also be written to a user-selected --run directory.
+**/environment.json
+**/volumes_latest.json
+**/analysis.json
+**/summary.json
+**/progress.json
+**/完整分析结论.md
+**/全部清理选项.md
+**/智能占用分析.md
+**/应用占用全表.md
+**/缓存临时目录全表.md
+**/旧版本与旧文件.md
+**/扫描缺口全表.md
 # Python build, tooling and local environments
 __pycache__/
 *.py[cod]
