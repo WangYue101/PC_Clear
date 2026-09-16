@@ -14,7 +14,7 @@ from .topology import partition_title, storage_topology
 
 TITLES={'cache':'应用缓存','build_cache':'代码生成缓存','build_binary':'编译中间二进制',
         'temporary':'较早的临时文件/转储','logs':'较早的应用日志','test_database':'测试数据库（应用内管理）',
-        'codex_catalog':'Codex 目录缓存','generated_binary':'任务生成的二进制','chat_media':'个人聊天媒体（明确选择）'}
+        'codex_catalog':'Codex 目录缓存','generated_binary':'任务生成的二进制','chat_media':'聊天媒体需确认'}
 IMPACTS={'cache':'退出对应应用；资源、依赖或索引需重新加载、下载或生成',
          'build_cache':'结束相关任务；下次运行重新生成',
          'build_binary':'结束构建；下次完整编译会更慢',
@@ -107,21 +107,22 @@ def main():
     versions=[x for a in data.values() for x in a['version_reviews']]
     ignored_sources=sum(a['dispositions'].get('tracked',{}).get('files',0) for a in data.values())
     app_count=sum(len(a['applications']) for a in data.values())
-    lines=['# C、D 扫描分区完整分析与待选清理清单','',
+    cleanup_file = '全部可清理项.md'
+    lines=['# C、D 扫描分区完整分析与可清理项','',
            f'报告生成：{stamp()}。已完成全盘可访问文件的元数据扫描，共 **{total_files:,} 个文件**。未执行用户文件清理，也没有停止应用或服务。','',
            '## 本轮结论','',
-           table(['扫描分区','当前可用空间','本轮候选估算','扫描文件数','扫描完成时间'],
+           table(['扫描分区','当前可用空间','本轮可清理上限','扫描文件数','扫描完成时间'],
                  [[d+':',human(volumes[d]['free']),human(reclaim[d]),f"{a['scan']['files']:,}",a['scan']['finished_at']] for d,a in data.items()]),'',
-           f"可预览的可重建内容 **{human(sum(direct_reclaim.values()))}**；测试数据库 **{human(sum(database_reclaim.values()))}** 需停止实例后在应用内整体处理；另有个人聊天媒体可选范围 **{human(sum(personal_reclaim.values()))}**。聊天媒体不能视作无损可清理缓存。按应用和用途共 {len(plan['groups'])} 组；只能按逐文件清单选择，不能整删上级目录。","",
+           f"可清理内容 **{human(sum(direct_reclaim.values()))}**；测试数据库 **{human(sum(database_reclaim.values()))}** 需停止实例后在应用内整体处理；另有需确认的个人聊天媒体 **{human(sum(personal_reclaim.values()))}**。聊天媒体不能视作无损可清理缓存。按应用和用途共 {len(plan['groups'])} 组；只能按逐文件清单勾选，不能整删上级目录。","",
             '本轮编号以 F 开头。此前生成的审计估算属于历史快照；磁盘内容已变化，请以本轮清单为准，不与旧清单相加。磁盘空闲空间的变化不代表本任务执行了清理。','',
            *physical_storage_section(topology),
-           f'读取到 {len(env["installed_apps"])} 条卸载注册表记录、{len(env["packaged_apps"])} 个当前用户商店包，以及 {len(env["processes"])} 条进程记录。注册记录可能含组件或重复项，不等于独立应用数量。按路径/仓库归属建立 {app_count} 个磁盘分组，完整占用表包含没有清理候选的应用和数据。','',
-           f'初筛候选中 {ignored_sources} 个 Git 已跟踪文件被保留；仓库内只有“未跟踪且被忽略”的文件才可能通过。配置、源码、凭据、聊天数据库、文档附件、安装环境、多个硬链接、读取失败或扫描后变化的文件均保留。个人聊天媒体单列，默认不选择。','',
-           '## 较大的待选项','',
+           f'读取到 {len(env["installed_apps"])} 条卸载注册表记录、{len(env["packaged_apps"])} 个当前用户商店包，以及 {len(env["processes"])} 条进程记录。注册记录可能含组件或重复项，不等于独立应用数量。按路径/仓库归属建立 {app_count} 个磁盘分组，完整占用表包含没有可清理项的应用和数据。','',
+           f'初筛可清理项中 {ignored_sources} 个 Git 已跟踪文件被保留；仓库内只有“未跟踪且被忽略”的文件才可能通过。配置、源码、凭据、聊天数据库、文档附件、安装环境、多个硬链接、读取失败或扫描后变化的文件均保留。个人聊天媒体单列，默认不勾选。','',
+           '## 较大的可清理项','',
            table(['编号','盘','应用 / 项目','类型','估计上限','文件数'],
                  [[g['id'],g['drive'],g['app'],TITLES[g['category']],human(g['estimated_bytes']),g['files']]
                   for g in plan['groups'] if g['estimated_bytes']>=100*2**20]),'',
-           f"全部编号、精确目录、Git 依据、类型与影响见 {local_link(run,'全部清理选项.md')}。运行 main.py 打开图形界面，在“清理选项”勾选，再“预览已选文件”；所有选项默认不选。个人聊天媒体独立显示，需要额外启用。",'',
+           f"全部编号、精确目录、Git 依据、类型与影响见 {local_link(run,cleanup_file)}。运行 main.py 打开图形界面，在“可清理项”勾选，再“预览已选文件”；所有清理项默认不勾选。个人聊天媒体独立显示，需要额外启用。",'',
            f"Codex 会话、插件、运行环境、中间产物，以及微信/QQ 数据库、接收文件和媒体的明细见 {local_link(run,'智能占用分析.md')}。保护只影响清理，不隐藏占用。",'',
            '## 过时、旧版本和临时文件','',
            f'发现 **{len(versions)} 处较旧版本目录**（同系列有较新版本并存），以及 **{len(aged)} 个至少 100 MiB、超过 90 天未修改的文件**。它们是复核线索，不能仅凭版本号或修改日期认定可删。旧目录大小可能包含已列出的缓存，不能再累加为释放量。','',
@@ -135,30 +136,30 @@ def main():
            table(['盘','目录数','读取失败','跳过重解析点','显式跳过'],
                  [[d,a['scan']['directories'],a['scan'].get('errors',0),a['scan'].get('reparse_skipped',0),a['scan'].get('explicit_exclusions',0)] for d,a in data.items()]),'',
            f"全量逐文件索引位于 C/inventory.sqlite、D/inventory.sqlite；无法读取与跳过路径见 {local_link(run,'扫描缺口全表.md')}。本次显式跳过本工具 reports 输出，避免扫描过程中把自己的增长文件反复纳入。Git 忽略和保护规则不会让普通数据在全盘统计中消失。",'',
-           '目录与应用占用使用逻辑字节，硬链接会重复，受保护系统内容及重解析点没有完整计入。候选在实测时排除多硬链接，并针对压缩/稀疏文件修正大小；仍不是严格的磁盘簇释放量。正在使用的文件要先关闭应用并再次检查，实际释放以清理后的空闲空间增量为准。','',
+           '目录与应用占用使用逻辑字节，硬链接会重复，受保护系统内容及重解析点没有完整计入。可清理文件在预览和执行时排除多硬链接，并针对压缩/稀疏文件修正大小；仍不是严格的磁盘簇释放量。正在使用的文件要先关闭应用并再次检查，实际释放以清理后的空闲空间增量为准。','',
            '本轮按扩展名、固定文件名及目录布局判断文件类型，没有解析文档、模型或聊天内容。安装列表可能漏掉便携程序；运行进程没命中路径不能证明应用未使用。全盘扫描也是动态观察，不是文件系统冻结快照。','',
            '## 忽略规则和复用','',
            '[.gitignore](../../.gitignore) 忽略含本机私有路径的报告、SQLite 清单、旧报告、日志和 Python 生成物，保留扫描源码、规则和测试。','',
-           '[scan_policy.json](../../scan_policy.json) 提供保护路径、保护文件类型、自定义保护规则、年龄阈值与独立扫描排除项。默认扫描排除列表为空；保护只影响候选。修改 Git 忽略规则不能将用户数据变成可删除缓存。','',
+           '[scan_policy.json](../../scan_policy.json) 提供保护路径、保护文件类型、自定义保护规则、年龄阈值与独立扫描排除项。默认扫描排除列表为空；保护只影响可清理项。修改 Git 忽略规则不能将用户数据变成可删除缓存。','',
            '扫描与分析命令不删除文件。图形界面支持先预览再明确确认的永久清理，逐文件核验、记录结果；过期或变化文件跳过。复用方式见仓库 [README.md](../../README.md)。','']
     write(run/'完整分析结论.md',lines)
-    options=['# 全部待选清理项','', '所有编号均未批准。每组只对应 candidate_files.jsonl 中 group_key 匹配的文件，目录表仅帮助定位，禁止解释为整目录删除。','',
-             table(['编号','盘','应用 / 项目','用途','候选上限','文件数'],
+    options=['# 全部可清理项','', '所有编号均未批准。每组只对应可清理文件清单 candidate_files.jsonl 中 group_key 匹配的文件，目录表仅帮助定位，禁止解释为整目录删除。','',
+             table(['编号','盘','应用 / 项目','用途','可清理上限','文件数'],
                    [[g['id'],g['drive'],g['app'],TITLES[g['category']],human(g['estimated_bytes']),g['files']] for g in plan['groups']]),'']
     for g in plan['groups']:
         options += [f"## {g['id']} · {g['app']} · {TITLES[g['category']]} · {human(g['estimated_bytes'])}",'',
                     IMPACTS[g['category']],'',
                     'Git 依据：'+ '；'.join(f'{k}: {v} 个文件' for k,v in git_counts[g['group_key']].items())+'。','',
                     '主要后缀：'+ '；'.join(f'{k if len(k)<32 else "[散列后缀]"} {human(v)}' for k,v in sorted(g['types'].items(),key=lambda x:x[1],reverse=True)[:8])+'。','',
-                    table(['精确范围（按清单内文件筛选）','候选文件数','候选上限'],
+                    table(['精确范围（按清单内文件筛选）','可清理文件数','可清理上限'],
                           [[p,v['files'],human(v['estimated_bytes'])] for p,v in sorted(g['scopes'].items(),key=lambda x:x[1]['estimated_bytes'],reverse=True)]),'']
-    write(run/'全部清理选项.md',options)
+    write(run/cleanup_file,options)
     storage=[(d,r) for d,a in data.items() for r in a.get('storage_groups',[])]
     special=[(d,r) for d,r in storage if r['kind'].startswith(('chat_','codex_')) or r['kind']=='generated']
     smart=['# 智能占用分析','',
-           '按实际目录布局、文件格式、Git 状态、修改时间和运行状态给出可解释结论。不会读取聊天正文。每个文件仅归入一个用途组；可选聊天媒体不是可重建缓存，默认不选择。','',
+           '按实际目录布局、文件格式、Git 状态、修改时间和运行状态给出可解释结论。不会读取聊天正文。每个文件仅归入一个用途组；聊天媒体需确认，不是可重建缓存，默认不勾选。','',
            '## C、D 扫描分区汇总（非物理硬盘）','',
-           table(['范围','分区容量合计','当前已用','当前可用','扫描逻辑文件','扫描文件数','可预览候选','测试数据库（应用内）','个人聊天媒体可选范围'],
+           table(['范围','分区容量合计','当前已用','当前可用','扫描逻辑文件','扫描文件数','可清理内容','测试数据库（应用内）','聊天媒体需确认'],
                  [['C、D 扫描范围',human(sum(v['total'] for v in volumes.values())),human(sum(v['used'] for v in volumes.values())),
                    human(sum(v['free'] for v in volumes.values())),human(sum(a['scan']['logical_bytes'] for a in data.values())),
                    f'{total_files:,}',human(sum(direct_reclaim.values())),human(sum(database_reclaim.values())),
@@ -172,22 +173,22 @@ def main():
         finally:
             connection.close()
         smart += [f'## {d} 盘','',
-                  table(['分区容量','当前已用','当前可用','扫描逻辑文件','扫描文件数','可预览候选','测试数据库（应用内）','个人聊天媒体可选范围'],
+                  table(['分区容量','当前已用','当前可用','扫描逻辑文件','扫描文件数','可清理内容','测试数据库（应用内）','聊天媒体需确认'],
                         [[human(volumes[d]['total']),human(volumes[d]['used']),human(volumes[d]['free']),human(a['scan']['logical_bytes']),
                           f"{a['scan']['files']:,}",human(direct_reclaim[d]),human(database_reclaim[d]),human(personal_reclaim[d])]]),'',
                   f'### {d} 盘 · 按应用','',
-                  table(['应用 / 项目','逻辑占用','文件数','候选上限'],
+                  table(['应用 / 项目','逻辑占用','文件数','可清理上限'],
                         [[name,human(value['logical_bytes']),value['files'],human(value.get('candidate_bytes',0))]
                          for name,value in sorted(app_rows,key=lambda item:item[1]['logical_bytes'],reverse=True)]),'',
                   f'### {d} 盘 · 按文件夹（根目录第一级）','',
                   table(['文件夹','逻辑占用','文件数'],[[path,human(size),files] for path,size,files in folder_rows]),'',
                   '图形界面可从上述根文件夹继续逐层展开；父子目录是包含关系，不能相加。','']
     smart += ['## Codex、任务生成数据、微信和 QQ','',
-           table(['盘','应用','用途','逻辑占用','文件数','可选范围上限','目录','依据','处理方式'],
+           table(['盘','应用','用途','逻辑占用','文件数','可清理上限','目录','依据','处理方式'],
                  [[d,r['app'],r['label'],human(r['logical_bytes']),r['files'],human(r['candidate_bytes']),r['scope'],r['reason'],r['action']]
                   for d,r in sorted(special,key=lambda x:x[1]['logical_bytes'],reverse=True)]),'',
            '## 所有应用用途与路径明细','',
-           table(['盘','应用/项目','用途','逻辑占用','文件数','超过 90 天未修改','可选范围上限'],
+           table(['盘','应用/项目','用途','逻辑占用','文件数','超过 90 天未修改','可清理上限'],
                  [[d,r['app'],r['label'],human(r['logical_bytes']),r['files'],human(r['old_bytes']),human(r['candidate_bytes'])]
                   for d,r in sorted(storage,key=lambda x:x[1]['logical_bytes'],reverse=True)]),'',
            '## 最大文件（不限制文件年龄）','',
@@ -203,18 +204,18 @@ def main():
                 app_rows.append((d,app,v))
     write(run/'应用占用全表.md',['# 应用和路径分组占用','',
           '每个已扫描文件仅归入一个分组；应用名称来自路径/最近 Git 仓库，不能等同于注册表产品数量。同一应用在不同磁盘、版本或路径可能分组显示。各列是重叠维度，不相加。','',
-          table(['盘','应用 / 路径组','逻辑占用','文件数','含 cache 路径字节','临时/日志目录字节','超过 90 天未改字节','候选估算'],
+          table(['盘','应用 / 路径组','逻辑占用','文件数','含 cache 路径字节','临时/日志目录字节','超过 90 天未改字节','可清理估算'],
                 [[d,n,human(v['logical_bytes']),v['files'],human(v.get('cache_name_bytes',0)),human(v.get('temp_log_directory_bytes',0)),
                   human(v.get('modified_over_90_days_bytes',0)),human(v.get('candidate_bytes',0))]
                  for d,n,v in sorted(app_rows,key=lambda x:x[2]['logical_bytes'],reverse=True)])])
     cache_rows=[(d,x) for d,a in data.items() for x in a['cache_directories']]
     write(run/'缓存临时目录全表.md',['# 缓存、临时、日志和转储目录全表','',
-          '包含所有此次扫描中名称匹配的目录，无大小阈值。父子目录不可相加。分类为缓存也不表示全部内容可删除；最终通过 Git、类型、链接和实时核验的文件见候选清单。','',
+          '包含所有此次扫描中名称匹配的目录，无大小阈值。父子目录不可相加。分类为缓存也不表示全部内容可删除；最终通过 Git、类型、链接和实时核验的文件见可清理文件清单。','',
           table(['盘','路径','逻辑大小','文件数','分类','依据','读取失败','跳过项'],
                 [[d,x['path'],human(x['logical_bytes']),x['files'],x['category'],x['reason'],x['errors'],x['skipped']]
                  for d,x in sorted(cache_rows,key=lambda x:x[1]['logical_bytes'],reverse=True)])])
     old_lines=['# 旧版本、旧文件与零散临时文件','',
-               '这里只提供核实线索。“未修改”不等于“未使用”。版本目录、文件与缓存候选可能重合，不能累计为额外释放空间。','',
+               '这里只提供核实线索。“未修改”不等于“未使用”。版本目录、文件与可清理缓存可能重合，不能累计为额外释放空间。','',
                '## 有较新同系列目录并存的旧版本','',
                table(['路径','旧版本','较新版本','逻辑大小','判断'],
                      [[x['path'],x['version'],x['newer_sibling'],human(x['logical_bytes']),x['decision']] for x in versions]),'',

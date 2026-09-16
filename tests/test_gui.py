@@ -110,7 +110,7 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(self.app.choice_tree.get_children())
         self.app.personal_button.invoke()
         root=self.app.choice_tree.get_children()[0]
-        self.assertEqual(self.app.choice_tree.item(root,'text'),'个人聊天媒体（额外确认）')
+        self.assertEqual(self.app.choice_tree.item(root,'text'),'聊天媒体需确认')
         drive=self.app.choice_tree.get_children(root)[0]
         self.assertEqual(self.app.choice_tree.get_children(drive),('F001',))
         self.assertFalse(self.app.selected)
@@ -135,7 +135,7 @@ class GuiTests(unittest.TestCase):
 
         roots=self.app.choice_tree.get_children()
         self.assertEqual([self.app.choice_tree.item(root,'text') for root in roots],
-                         ['可预览的可重建内容','需要应用内处理'])
+                         ['可清理内容','需要应用内处理'])
         rebuild=self.app.choice_tree.get_children(roots[0])[0]
         database=self.app.choice_tree.get_children(roots[1])[0]
         self.assertEqual(self.app.choice_tree.get_children(rebuild),('F001',))
@@ -144,7 +144,7 @@ class GuiTests(unittest.TestCase):
 
         self.app.personal_button.invoke()
         roots=self.app.choice_tree.get_children()
-        self.assertEqual(self.app.choice_tree.item(roots[-1],'text'),'个人聊天媒体（额外确认）')
+        self.assertEqual(self.app.choice_tree.item(roots[-1],'text'),'聊天媒体需确认')
         personal=self.app.choice_tree.get_children(roots[-1])[0]
         self.assertEqual(self.app.choice_tree.get_children(personal),('F003',))
         self.app.toggle(roots[0])

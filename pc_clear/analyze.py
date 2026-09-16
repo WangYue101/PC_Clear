@@ -54,7 +54,7 @@ def version_reviews(directories):
             if version < newest:
                 result.append({'path':row['path'],'version':text,'newer_sibling':'.'.join(map(str,newest)),
                                'logical_bytes':row['total_bytes'],'newest_mtime':row['newest'],
-                               'decision':'版本号较旧；兼容、回退、配置或插件用途未确认，未列入自动清理候选'})
+                               'decision':'版本号较旧；兼容、回退、配置或插件用途未确认，未列入可清理清单'})
     return sorted(result,key=lambda x:x['logical_bytes'],reverse=True)
 
 
@@ -121,7 +121,7 @@ def analyze_drive(database,policy,environment,manifest):
             owner=storage.app
         if not storage and context.category in {'cache','build_cache','build_binary','temporary','logs'}:
             kind = 'application_cache' if context.category=='cache' else 'temporary' if context.category in {'temporary','logs'} else 'build_output'
-            storage_contexts[ident]=Storage(owner,kind,context.scope,context.reason,'可预览已通过 Git、类型和文件检查的部分；其余保留')
+            storage_contexts[ident]=Storage(owner,kind,context.scope,context.reason,'可清理文件已通过 Git、类型和文件检查；其余保留')
         owners[ident]=owner
         apps[owner]['logical_bytes']+=row['own_bytes']
         apps[owner]['files']+=row['own_files']

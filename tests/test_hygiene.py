@@ -14,7 +14,7 @@ class GitIgnoreTests(unittest.TestCase):
         outputs=(
             'scratch-run/environment.json', 'scratch-run/volumes_latest.json',
             'scratch-run/C/analysis.json', 'scratch-run/C/summary.json', 'scratch-run/C/progress.json',
-            'scratch-run/完整分析结论.md', 'scratch-run/全部清理选项.md',
+            'scratch-run/完整分析结论.md', 'scratch-run/全部清理选项.md', 'scratch-run/全部可清理项.md',
             'scratch-run/智能占用分析.md', 'scratch-run/应用占用全表.md',
             'scratch-run/缓存临时目录全表.md', 'scratch-run/旧版本与旧文件.md',
             'scratch-run/扫描缺口全表.md',

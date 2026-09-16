@@ -94,7 +94,7 @@ def directory_storage(path, chat_roots=None):
                            '会话和归档记录；归档不等于可丢弃缓存', '保留；通过 Codex 管理任务历史')
         if tail and tail[0] == 'cache':
             return Storage('Codex', 'codex_cache', '/'.join(parts[:i + 3]),
-                           '工具目录或服务目录的本地缓存；仅已识别目录进入候选', '可预览已识别缓存')
+                           '工具目录或服务目录的本地缓存；仅已识别目录进入可清理清单', '可清理已识别缓存')
         if tail and tail[0] in {'plugins', 'skills', 'vendor_imports'}:
             return Storage('Codex', 'codex_runtime', root + '/' + tail[0],
                            '安装的插件、技能或导入代码，运行时需要', '保留')
@@ -106,7 +106,7 @@ def directory_storage(path, chat_roots=None):
     for i, part in enumerate(parts):
         if part in GENERATED_DIRS:
             return Storage('任务生成数据', 'generated', '/'.join(parts[:i + 1]),
-                           '任务中间目录可能同时含源码、依赖、测试数据和产物；须结合 Git 和类型', '仅选择已验证可重建的文件')
+                           '任务中间目录可能同时含源码、依赖、测试数据和产物；须结合 Git 和类型', '仅勾选已验证可重建的文件')
     return None
 
 

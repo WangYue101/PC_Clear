@@ -84,7 +84,7 @@ def revalidate_rule(row, policy, chromium_roots=None, generated_outputs=()):
     path = checked_path(row['path'])
     scope = checked_path(row['scope'])
     if not inside(path, scope) or norm(path) == norm(scope):
-        raise ValueError('文件不在候选的精确范围内')
+        raise ValueError('文件不在可清理的精确范围内')
     # A current directory layout is evidence; manifest-provided layout hints are not authority.
     chat_roots = {}
     if row['category'] == 'chat_media' and not any(x in norm(path).split('/') for x in ('xwechat_files','wechat files','tencent files','nt_qq','qq files')):
@@ -102,7 +102,7 @@ def revalidate_rule(row, policy, chromium_roots=None, generated_outputs=()):
         chromium_layout(scope) if chromium_roots is None else chromium_roots, mysql, chat_roots, generated_outputs)
     decision, reason = classify_file(context, path.name, (time.time() - row['mtime']) / 86400, policy)
     if context.category != row['category'] or decision != 'candidate' or norm(context.scope) != norm(scope):
-        raise ValueError('当前规则不再允许该候选：' + reason)
+        raise ValueError('当前规则不再允许清理该文件：' + reason)
     repo = nearest_repository(path)
     if norm(repo) != norm(row.get('repository', '')):
         raise ValueError('Git 仓库边界已变化；请重新分析')
@@ -166,7 +166,7 @@ class CleanupSession:
     def _read_selection(self, ids, personal):
         ids = set(ids)
         if not ids:
-            raise ValueError('请先勾选清理项；默认不选择任何文件')
+            raise ValueError('请先勾选清理项；默认不清理任何文件')
         groups = {g['id']: g for g in self.plan['groups']}
         if ids - groups.keys():
             raise ValueError('存在不属于本次分析的编号')

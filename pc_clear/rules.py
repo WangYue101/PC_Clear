@@ -186,10 +186,10 @@ def classify_file(context, name, age_days, policy):
     if extension in policy['protected_extensions']:
         return 'protected','源码、文档、数据库、模型或磁盘镜像格式'
     if context.category in {'cache','build_cache','build_binary','temporary','logs','test_database','generated_binary','chat_media'} and age_days < context.min_days:
-        return 'recent','尚未满足候选的静置时间'
+        return 'recent','尚未满足进入可清理清单的静置时间'
     if context.category == 'chat_media':
         if extension in MEDIA_TYPES | {'.dat', '.pic', '.thumb'}:
-            return 'candidate', '个人聊天媒体；仅在明确接受原图/视频/语音可能丢失后选择'
+            return 'candidate', '个人聊天媒体；仅在明确接受原图/视频/语音可能丢失后勾选'
         return 'protected', '聊天目录中的数据库、文档、配置和未知文件保留'
     if context.category == 'generated_binary':
         allowed = (BUILD_TYPES - {'.bin', '.dat'}) | {'.dll', '.exe', '.pyc'}

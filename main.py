@@ -22,7 +22,7 @@ def main(argv=None):
         reconfigure = getattr(stream, 'reconfigure', None)
         if callable(reconfigure):
             reconfigure(encoding='utf-8', errors='replace')
-    parser = argparse.ArgumentParser(description='默认打开磁盘分析与可选清理界面。所有选择默认关闭；命令行扫描和分析不删除文件。')
+    parser = argparse.ArgumentParser(description='默认打开磁盘分析与清理界面。所有可清理项默认关闭；命令行扫描和分析不删除文件。')
     parser.add_argument('--mode', choices=('gui', 'full', 'analyze', 'report'),
                         help='gui：图形界面（默认）；full：完整扫描；analyze：重新分析；report：生成报告')
     parser.add_argument('--run', type=Path, help='报告目录；已有清单模式必须填写，相对路径以项目根目录为准')

@@ -35,7 +35,7 @@ def latest_scan_run(reports):
 class Application:
     def __init__(self, root, run=None):
         self.root = root
-        root.title('PC_Clear · 磁盘分析与可选清理')
+        root.title('PC_Clear · 磁盘分析与清理')
         root.geometry('1240x820')
         root.minsize(980, 680)
         self.messages = queue.Queue()
@@ -61,7 +61,7 @@ class Application:
         self.topology_serial = 0
         self.active_query = ''
         self.folder_matches = {}
-        self.status = tk.StringVar(value='默认只分析。所有清理选项均未勾选。')
+        self.status = tk.StringVar(value='默认只分析。所有可清理项均未勾选。')
         self.search = tk.StringVar()
         self.personal = tk.BooleanVar(value=False)
         self.personal_state = False
@@ -87,7 +87,7 @@ class Application:
         self.browser = ttk.Frame(self.notebook, padding=8)
         self.preview_tab = ttk.Frame(self.notebook, padding=8)
         self.log_tab = ttk.Frame(self.notebook, padding=8)
-        for frame, label in [(self.overview, '全部占用'), (self.choices, '清理选项'),
+        for frame, label in [(self.overview, '全部占用'), (self.choices, '可清理项'),
                              (self.browser, '目录与文件'), (self.preview_tab, '执行预览'), (self.log_tab, '进度与日志')]:
             self.notebook.add(frame, text=label)
         searchbar = ttk.Frame(self.overview)
@@ -114,7 +114,7 @@ class Application:
         self.overview_notebook.add(self.app_view, text='应用智能分析')
         self.overview_notebook.add(self.folder_view, text='文件夹分析')
         columns = [('kind','分类',110), ('bytes','逻辑占用',120),
-                   ('candidate','候选上限',105), ('files','文件数',90)]
+                   ('candidate','可清理上限',105), ('files','文件数',90)]
         self.app_tree = self.tree(self.app_view, columns, hierarchy_label='物理硬盘 / 分区 / 应用')
         self.folder_tree = self.tree(self.folder_view, columns, hierarchy_label='物理硬盘 / 分区 / 文件夹')
         self.usage_tree = self.app_tree
@@ -125,28 +125,28 @@ class Application:
         detail_box = ttk.LabelFrame(self.overview, text='所选项目说明', padding=(10, 6))
         detail_box.pack(fill='x', pady=(8, 0))
         self.overview_detail_title = tk.StringVar(value='选择硬盘、分区、应用或文件夹')
-        self.overview_detail = tk.StringVar(value='实时容量来自 Windows；扫描逻辑占用来自报告。候选上限只是分析结果，预览后才可执行。')
+        self.overview_detail = tk.StringVar(value='实时容量来自 Windows；扫描逻辑占用来自报告。可清理上限只是分析结果，预览后才可执行。')
         ttk.Label(detail_box, textvariable=self.overview_detail_title, style='DetailTitle.TLabel').pack(anchor='w')
         ttk.Label(detail_box, textvariable=self.overview_detail, wraplength=1130, justify='left').pack(fill='x', pady=(3, 0))
-        ttk.Label(self.overview, text='物理容量不把 C、D 当成两块硬盘相加；系统、保留和恢复分区只展示容量，不扫描或清理。应用与文件夹分别分析；候选上限须在清理页预览。', wraplength=1150).pack(fill='x', pady=(5, 0))
-        self.personal_button = ttk.Checkbutton(self.choices, text='显示个人聊天媒体选项（可能失去原图、视频或语音；数据库、文档附件继续保留）',
+        ttk.Label(self.overview, text='物理容量不把 C、D 当成两块硬盘相加；系统、保留和恢复分区只展示容量，不扫描或清理。应用与文件夹分别分析；可清理项须在清理页预览。', wraplength=1150).pack(fill='x', pady=(5, 0))
+        self.personal_button = ttk.Checkbutton(self.choices, text='显示需确认的个人聊天媒体（可能失去原图、视频或语音；数据库、文档附件继续保留）',
                         variable=self.personal, command=self.personal_changed)
         self.personal_button.pack(anchor='w', pady=4)
         choicebar = ttk.Frame(self.choices)
         choicebar.pack(fill='x', pady=6)
         ttk.Button(choicebar, text='预览已选文件', command=self.prepare).pack(side='left')
-        ttk.Button(choicebar, text='取消全部选择', command=self.clear_selection).pack(side='left', padx=8)
-        self.selection_label = ttk.Label(choicebar, text='尚未选择')
+        ttk.Button(choicebar, text='取消全部勾选', command=self.clear_selection).pack(side='left', padx=8)
+        self.selection_label = ttk.Label(choicebar, text='尚未勾选')
         self.selection_label.pack(side='left', padx=8)
         self.cleanup_summary = ttk.Label(self.choices, wraplength=1150, justify='left')
         self.cleanup_summary.pack(fill='x', pady=(0, 6))
-        self.choice_tree = self.tree(self.choices, [('check','选择',72), ('id','编号',70), ('drive','分区',54),
-            ('app','应用 / 项目',250), ('category','内容类型',190), ('bytes','候选上限',100), ('files','文件数',80)],
+        self.choice_tree = self.tree(self.choices, [('check','勾选',72), ('id','编号',70), ('drive','分区',54),
+            ('app','应用 / 项目',250), ('category','内容类型',190), ('bytes','可清理上限',100), ('files','文件数',80)],
             hierarchy_label='智能清理建议 / 分区')
         self.choice_tree.bind('<Button-1>', self.click_choice)
         self.choice_tree.bind('<space>', self.toggle_focus)
         self.choice_tree.bind('<Double-1>', self.show_choice)
-        ttk.Label(self.choices, text='仅“可预览的可重建内容”和已显示的聊天媒体可勾选。点击第一列选择；双击其他列查看精确范围。默认不删除，预览会再次核验 Git、文件类型、文件身份和运行状态。', wraplength=1150).pack(fill='x', pady=6)
+        ttk.Label(self.choices, text='“可清理内容”和已显示的聊天媒体可以勾选。点击第一列勾选；双击其他列查看精确范围。默认不删除，预览会再次核验 Git、文件类型、文件身份和运行状态。', wraplength=1150).pack(fill='x', pady=6)
         browsebar = ttk.Frame(self.browser)
         browsebar.pack(fill='x')
         self.drive_combo = ttk.Combobox(browsebar, textvariable=self.drive, values=('C','D'), state='readonly', width=3)
@@ -272,7 +272,7 @@ class Application:
             self.invalidate()
             self.refresh()
             times = '；'.join(d + ' 盘 ' + a['scan']['finished_at'] for d,a in self.data.items())
-            self.status.set('已载入扫描快照：' + times + ('。Windows 实时容量读取失败，已标为扫描时容量。' if self.topology_read_failed else '。默认只分析，未选择清理项。'))
+            self.status.set('已载入扫描快照：' + times + ('。Windows 实时容量读取失败，已标为扫描时容量。' if self.topology_read_failed else '。默认只分析，未勾选清理项。'))
             self.notebook.select(self.overview)
         self.worker(action, done)
 
@@ -288,9 +288,9 @@ class Application:
             self.refresh()
             if self.preview and self.preview.summary['ready_files']:
                 self.execute_button.configure(state='normal')
-            self.status.set('Windows 实时硬盘容量读取失败；已保留扫描时容量，扫描快照和清理候选没有变化。'
+            self.status.set('Windows 实时硬盘容量读取失败；已保留扫描时容量，扫描快照和可清理项没有变化。'
                             if self.topology_read_failed else
-                            '已刷新 Windows 实时硬盘容量；扫描快照和清理候选保持不变。')
+                            '已刷新 Windows 实时硬盘容量；扫描快照和可清理项保持不变。')
         self.worker(action, done)
 
     def choose_run(self):
@@ -375,13 +375,13 @@ class Application:
                         if g.get('category') == 'test_database')
         media = sum(g['estimated_bytes'] for g in self.plan.get('groups',[]) if g.get('risk') == 'personal')
         self.summary_label.configure(text=(
-            f'已索引 {total:,} 个文件。可预览的可重建内容 {human(rebuild)}；'
-            f'测试数据库 {human(databases)} 需应用内整体处理；个人聊天媒体可选范围 {human(media)}。'
+            f'已索引 {total:,} 个文件。可清理内容 {human(rebuild)}；'
+            f'测试数据库 {human(databases)} 需应用内整体处理；个人聊天媒体需确认 {human(media)}。'
             '所有清理都须预览核验。'
             + (' 旧版报告需点击“重新分析当前清单”。' if self.plan.get('schema_version') != 2 else '')
         ))
         self.build_cleanup_choices(query)
-        self.selection_label.configure(text=f'已选 {len(self.selected)} 组 · 候选上限 {human(sum(g["estimated_bytes"] for g in self.plan.get("groups",[]) if g["id"] in self.selected))}')
+        self.selection_label.configure(text=f'已勾选 {len(self.selected)} 组 · 可清理上限 {human(sum(g["estimated_bytes"] for g in self.plan.get("groups",[]) if g["id"] in self.selected))}')
 
     def cleanup_bucket(self, group):
         """Return the UI safety bucket for a cleanup group."""
@@ -389,9 +389,9 @@ class Application:
             return ('database', '需要应用内处理',
                     '测试数据库可重建，但不能逐文件删除；请停止实例后用数据库管理工具整体处理。')
         if group.get('risk') == 'personal':
-            return ('personal', '个人聊天媒体（额外确认）',
+            return ('personal', '聊天媒体需确认',
                     '可能失去唯一的原图、视频或语音；聊天数据库、附件和配置继续保留。')
-        return ('rebuild', '可预览的可重建内容',
+        return ('rebuild', '可清理内容',
                 '已按 Git、文件类型和静置时间筛选；预览会再次核验每个文件。')
 
     def build_cleanup_choices(self, query=''):
@@ -415,10 +415,10 @@ class Application:
                          for key, item in buckets.items() if key != 'database' for group in item['groups'])
         database = sum(group.get('estimated_bytes', 0) for group in buckets.get('database', {}).get('groups', []))
         personal = sum(group.get('estimated_bytes', 0) for group in buckets.get('personal', {}).get('groups', []))
-        personal_note = (f'；当前显示个人聊天媒体 {human(personal)}' if self.personal.get()
-                         else '；个人聊天媒体默认隐藏')
+        personal_note = (f'；当前显示需确认聊天媒体 {human(personal)}' if self.personal.get()
+                         else '；需确认聊天媒体默认隐藏')
         self.cleanup_summary.configure(text=(
-            f'智能建议按操作方式分组：可预览并可选择 {human(selectable)}，'
+            f'智能建议按操作方式分组：可清理 {human(selectable)}，'
             f'测试数据库 {human(database)} 需要应用内处理{personal_note}。'
         ))
 
@@ -544,16 +544,16 @@ class Application:
                 if scan:
                     candidate = sum(group.get('estimated_bytes', 0) for group in self.plan.get('groups', [])
                                     if group.get('drive') == drive)
-                    coverage = f'已扫描 · 候选上限 {human(candidate)}'
+                    coverage = f'已扫描 · 可清理上限 {human(candidate)}'
                     detail = (f'{self.drive_title(drive)} 的实时容量来自 Windows；扫描快照完成于 '
                               f'{scan.get("finished_at", "未知")}，索引逻辑文件 {human(scan.get("logical_bytes", 0))} '
-                              f'、{scan.get("files", 0):,} 个。候选须在清理页预览后才能执行。')
+                              f'、{scan.get("files", 0):,} 个。可清理项须在清理页预览后才能执行。')
                 else:
                     coverage = '仅容量展示 · 不扫描/清理'
                     system_partition = partition.partition_type in {'System', 'Reserved', 'Recovery'}
-                    detail = ('该分区用于系统、保留或恢复；仅展示容量，不提供清理选项。'
+                    detail = ('该分区用于系统、保留或恢复；仅展示容量，不提供可清理项。'
                               if system_partition else
-                              '该数据分区不在本次 C/D 扫描范围内；仅展示容量，不提供清理选项。')
+                              '该数据分区不在本次 C/D 扫描范围内；仅展示容量，不提供可清理项。')
                 self.topology_insert(root, partition_title(partition),
                     '已扫描分区' if scan else ('系统 / 恢复分区' if partition.partition_type in {'System', 'Reserved', 'Recovery'} else '未扫描分区'),
                     partition.volume_size if partition.volume_size is not None else partition.size,
@@ -588,7 +588,7 @@ class Application:
         app_root = self.overview_insert(self.app_tree, '', '应用智能分析', '扫描范围', total_logical,
             total_candidate, total_files, '文件按应用、数据布局或最近 Git 项目归属；同一文件只归入一个应用。', opened=True)
         folder_root = self.overview_insert(self.folder_tree, '', '文件夹分析', '扫描范围', total_logical,
-            None, total_files, '目录大小包含子目录，父子目录不能相加；清理候选不在此树中重复计算。', opened=True)
+            None, total_files, '目录大小包含子目录，父子目录不能相加；可清理项不在此树中重复计算。', opened=True)
         for disk, drives in self.scan_disk_groups():
             disk_logical = sum(self.data[drive]['scan'].get('logical_bytes', 0) for drive in drives)
             disk_candidate = sum(group.get('estimated_bytes', 0) for group in groups if group.get('drive') in drives)
@@ -793,12 +793,12 @@ class Application:
         if event and self.choice_tree.identify_column(event.x) == '#1': return
         key = self.choice_tree.focus()
         row = next((g for g in self.plan.get('groups',[]) if g['id']==key),None)
-        if row: self.show_text('候选范围 '+key, json.dumps(row, ensure_ascii=False, indent=2))
+        if row: self.show_text('可清理范围 '+key, json.dumps(row, ensure_ascii=False, indent=2))
 
     def prepare(self):
         if self.busy: return
         if not self.run or not self.selected:
-            messagebox.showinfo('尚未选择', '请先点击清理选项第一列，勾选要预览的组。')
+            messagebox.showinfo('尚未勾选', '请先在“可清理项”第一列勾选要预览的组。')
             return
         ids, personal, run = set(self.selected), self.personal.get(), self.run
         self.invalidate()
@@ -904,7 +904,7 @@ class Application:
             self.folder.set(path)
             self.browse()
         else:
-            self.show_text('文件位置',path+'\n\n此浏览器只显示元数据；清理请在“清理选项”中选择。')
+            self.show_text('文件位置',path+'\n\n此浏览器只显示元数据；清理请在“可清理项”中勾选。')
 
     def open_run(self):
         if self.run: os.startfile(self.run)
